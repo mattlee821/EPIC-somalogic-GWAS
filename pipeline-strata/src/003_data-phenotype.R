@@ -286,8 +286,30 @@ bio_set <- unique(stats::na.omit(meta_sample$bio))
 bio_lookup <- meta_sample |>
   dplyr::distinct(bio, IID_clean)
 
+# Not every study writes Idepic_Bio the same way. Neuro_01's .psam stores it
+# with the underscore RUN COLLAPSED to one character -- "00_00000003" for
+# "00____00000004" -- which matches neither an exact Idepic_Bio nor the
+# "<digits>____<digits>" component pattern, so all 4,415 of its samples were
+# silently dropped. Collapsing is injective over this metadata (Idepic_Bio and
+# its collapsed form both have 17,594 unique values), so the canonical ID is
+# recoverable without ambiguity. The lookup below is built once and guards
+# against collisions in case that ever stops holding.
+bio_collapsed_lookup <- local({
+  key <- gsub("_+", "_", bio_set)
+  dup <- duplicated(key) | duplicated(key, fromLast = TRUE)
+  if (any(dup)) {
+    warning("Collapsing underscores makes ", sum(dup), " Idepic_Bio values ambiguous; ",
+            "they are excluded from collapsed matching.", call. = FALSE, immediate. = TRUE)
+  }
+  stats::setNames(bio_set[!dup], key[!dup])
+})
+
 extract_bio <- function(iid, bio_set) {
+  # 1. exact Idepic_Bio
   hit <- ifelse(iid %in% bio_set, iid, NA_character_)
+
+  # 2. an Idepic_Bio component of a compound IID, e.g.
+  #    "00____0000000A_00____00000001" -> "00____00000002"
   need <- is.na(hit)
   if (any(need)) {
     cand <- regmatches(iid[need], gregexpr("[0-9]+_{4,}[0-9]+", iid[need]))
@@ -296,6 +318,17 @@ extract_bio <- function(iid, bio_set) {
       if (length(m)) m[[1]] else NA_character_
     }, character(1))
   }
+
+  # 3. the whole IID as a collapsed Idepic_Bio, mapped back to canonical form.
+  #    Deliberately NOT extended to collapsed COMPONENTS of compound IIDs: that
+  #    needs a loose "<digits>_<digits>" pattern which could mis-assign a
+  #    sample, and no study currently requires it. check_id_matching.R will show
+  #    it if one ever does.
+  need <- is.na(hit)
+  if (any(need)) {
+    hit[need] <- unname(bio_collapsed_lookup[gsub("_+", "_", iid[need])])
+  }
+
   hit
 }
 

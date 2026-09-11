@@ -78,9 +78,12 @@ for (nm in names(id_spaces)) {
               paste(head(id_spaces[[nm]], 3), collapse = ", ")))
 }
 
-# --- extract_bio, copied verbatim from 003 ----------------------------------
+# --- two matchers: the frozen tree's, and whatever 003 currently does --------
 bio_set <- id_spaces$Idepic_Bio
-extract_bio <- function(iid, bio_set) {
+
+# OLD: verbatim from the frozen pipeline/. Exact Idepic_Bio, or a
+# "<digits>____<digits>" component of a compound IID.
+extract_bio_old <- function(iid, bio_set) {
   hit <- ifelse(iid %in% bio_set, iid, NA_character_)
   need <- is.na(hit)
   if (any(need)) {
@@ -92,6 +95,21 @@ extract_bio <- function(iid, bio_set) {
   }
   hit
 }
+
+# NEW: lifted straight out of src/003_data-phenotype.R so this diagnostic can
+# never drift from what the pipeline actually does.
+local({
+  f <- file.path(dirname(dirname(normalizePath(sub("^--file=", "",
+         grep("^--file=", commandArgs(FALSE), value = TRUE)[1])))), "003_data-phenotype.R")
+  if (!file.exists(f)) f <- "src/003_data-phenotype.R"
+  if (!file.exists(f)) stop("Cannot locate 003_data-phenotype.R to read its matcher.")
+  src <- readLines(f, warn = FALSE)
+  i <- grep("^bio_collapsed_lookup <- local", src)[1]
+  k <- grep("^extract_bio <- function", src)[1]
+  j <- grep("^}$", src); j <- j[j > k][1]
+  if (any(is.na(c(i, k, j)))) stop("Could not extract the matcher from ", f)
+  eval(parse(text = paste(src[i:j], collapse = "\n")), envir = globalenv())
+})
 
 read_psam_iids <- function(f) {
   dt <- data.table::fread(f, showProgress = FALSE)
@@ -118,7 +136,8 @@ for (gdir in genetics_dirs) {
     iids <- read_psam_iids(f)
     iids_collapsed <- collapse_us(iids)
 
-    n_pipeline <- sum(!is.na(extract_bio(iids, bio_set)))
+    n_old <- sum(!is.na(extract_bio_old(iids, bio_set)))
+    n_new <- sum(!is.na(extract_bio(iids, bio_set)))
     counts <- vapply(names(id_spaces), function(sp) {
       max(sum(iids %in% id_spaces[[sp]]), sum(iids_collapsed %in% id_spaces[[sp]]))
     }, integer(1))
@@ -126,7 +145,7 @@ for (gdir in genetics_dirs) {
     best <- names(counts)[which.max(counts)]
     rows[[study]] <- data.frame(
       study = study, n_read = length(iids),
-      pipeline = n_pipeline,
+      pipeline = n_old, fixed = n_new,
       Idepic_Bio = counts[["Idepic_Bio"]], Idepic = counts[["Idepic"]],
       Idepic_collapsed = counts[["Idepic_collapsed"]], Bio_collapsed = counts[["Bio_collapsed"]],
       best_space = best, best_n = max(counts),
@@ -138,23 +157,28 @@ for (gdir in genetics_dirs) {
   tab <- do.call(rbind, rows)
   tab <- tab[order(tab$pipeline / pmax(tab$n_read, 1)), ]
 
-  cat(sprintf("%-16s %7s %9s %11s %8s %10s %9s  %-17s %s\n",
-      "STUDY", "READ", "PIPELINE", "Idepic_Bio", "Idepic", "Idepic_col", "Bio_col", "BEST SPACE", "UNDERSCORES"))
+  cat(sprintf("%-16s %7s %7s %7s %11s %8s %10s %9s  %-17s %s\n",
+      "STUDY", "READ", "OLD", "NEW", "Idepic_Bio", "Idepic", "Idepic_col", "Bio_col", "BEST SPACE", "UNDERSCORES"))
   for (i in seq_len(nrow(tab))) {
     r <- tab[i, ]
-    flag <- if (r$pipeline == 0 && r$best_n > 0) "  <== RECOVERABLE" else
+    flag <- if (r$fixed > r$pipeline) sprintf("  <== +%d RECOVERED", r$fixed - r$pipeline) else
+            if (r$pipeline == 0 && r$best_n > 0) "  <== RECOVERABLE" else
             if (r$pipeline == 0) "  <== no match anywhere" else ""
-    cat(sprintf("%-16s %7d %9d %11d %8d %10d %9d  %-17s %s%s\n",
-        r$study, r$n_read, r$pipeline, r$Idepic_Bio, r$Idepic,
+    cat(sprintf("%-16s %7d %7d %7d %11d %8d %10d %9d  %-17s %s%s\n",
+        r$study, r$n_read, r$pipeline, r$fixed, r$Idepic_Bio, r$Idepic,
         r$Idepic_collapsed, r$Bio_collapsed,
         sprintf("%s(%d)", r$best_space, r$best_n), r$underscores, flag))
   }
 
   cat("\nTotals: read =", sum(tab$n_read),
-      "| matched by pipeline =", sum(tab$pipeline),
-      "| best-case across spaces =", sum(tab$best_n), "\n")
+      "| OLD matcher =", sum(tab$pipeline),
+      "| NEW matcher =", sum(tab$fixed),
+      sprintf("(+%d)", sum(tab$fixed) - sum(tab$pipeline)), "\n")
+  cat("The per-space columns count WHOLE-IID matches only; they ignore the\n")
+  cat("component extraction both matchers do, so they read lower than OLD/NEW\n")
+  cat("for studies with compound IIDs. They are for attribution, not a target.\n")
 
-  broken <- tab[tab$pipeline == 0 & tab$best_n > 0, ]
+  broken <- tab[tab$fixed == 0 & tab$best_n > 0, ]
   if (nrow(broken)) {
     cat("\n", strrep("-", 78), "\n", sep = "")
     cat("STUDIES THE PIPELINE DROPS BUT ANOTHER ID SPACE WOULD RECOVER:\n")
