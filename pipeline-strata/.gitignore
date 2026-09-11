@@ -1,0 +1,33 @@
+# Nested gitignore: the root one anchors its result patterns with a leading
+# slash, so they do not reach into this tree.
+
+.env
+.env.local
+.env.*
+!.env.example
+
+# Nextflow run state
+work/
+results/
+.nextflow*
+tools/
+src/logs/
+__pycache__/
+
+# Generated inputs and outputs
+pipeline/samplesheet.csv
+analysis/
+transfer/
+
+# Bulk GWAS formats
+*.pgen
+*.pvar
+*.psam
+*.bgen
+*.regenie
+*.regenie.gz
+*.tbl
+*.tbl.gz
+*.sumstats
+*.sumstats.gz
+*.tsv.gz

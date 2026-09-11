@@ -1,0 +1,15 @@
+name: ldsc
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Runtime deps for the CBIIT python-3 port of LDSC (branch ldsc39). The LDSC
+  # source itself (munge_sumstats.py / ldsc.py) and the EUR reference panel are
+  # NOT conda packages -- they are cloned + downloaded once by
+  # src/006_ldsc_intercept.sh --setup; this env only provides the interpreter.
+  - python=3.10
+  - numpy
+  - scipy
+  - pandas
+  - bitarray

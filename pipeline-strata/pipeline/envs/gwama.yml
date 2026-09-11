@@ -1,0 +1,4 @@
+name: gwama
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - gwama

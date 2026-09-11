@@ -1,0 +1,14 @@
+name: r_gwas
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - r-base
+  - r-data.table
+  - r-optparse
+  - r-ggplot2
+  - r-qqman
+  - r-knitr
+  - r-rmarkdown
+  - r-dt
