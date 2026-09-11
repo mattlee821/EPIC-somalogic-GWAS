@@ -276,7 +276,31 @@ extract_bio <- function(iid, bio_set) {
   hit
 }
 
-data_genetic <- Sys.glob(file.path(genetics_path, "*", "*.psam")) |>
+# Per-study PLINK2 filesets. Two layouts exist and both are supported:
+#   flat    <genetics>/<study>.psam          (current: data/genetics/)
+#   nested  <genetics>/<study>/<study>.psam  (older /scratch staging from 002)
+# The flat layout is probed first. Detecting this rather than assuming matters:
+# the wrong glob silently finds zero files and every downstream count is 0.
+psam_files    <- Sys.glob(file.path(genetics_path, "*.psam"))
+genetics_flat <- length(psam_files) > 0
+if (!genetics_flat) {
+  psam_files <- Sys.glob(file.path(genetics_path, "*", "*.psam"))
+}
+if (length(psam_files) == 0) {
+  stop("No .psam files found under ", genetics_path,
+       "\nLooked for both <dir>/*.psam and <dir>/*/*.psam. ",
+       "Check GWAS_GENETICS_DIR in .env.")
+}
+message("Genetics layout: ", if (genetics_flat) "flat" else "nested",
+        " -- ", length(psam_files), " study fileset(s) under ", genetics_path)
+
+# Resolve a study's PLINK2 prefix under whichever layout is in use.
+study_pfile_prefix <- function(study) {
+  if (genetics_flat) file.path(genetics_path, study)
+  else file.path(genetics_path, study, study)
+}
+
+data_genetic <- psam_files |>
   purrr::map_dfr(function(f) {
     STUDY_name <- basename(f) |> tools::file_path_sans_ext()
     dt <- data.table::fread(f)
@@ -706,7 +730,7 @@ get_abs_path <- function(p) {
 
 samplesheet_rows <- list()
 for (study in sort(unique(data_pheno$STUDY))) {
-  pfile_prefix <- file.path(genetics_path, study, study)
+  pfile_prefix <- study_pfile_prefix(study)
   for (ext in c(".pgen", ".pvar", ".psam")) {
     if (!file.exists(paste0(pfile_prefix, ext))) {
       stop("Missing PLINK2 file ", paste0(study, ext), " under ", genetics_path)
