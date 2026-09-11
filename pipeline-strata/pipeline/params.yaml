@@ -76,6 +76,18 @@ analysis_groups:   ["all", "ever", "never"]   # 'all' is the PCA reference (see 
 # Minimum samples in a stratum for that study before it is analysed at all.
 min_stratum_n:     100
 
+# Strata that must be analysed on the SAME set of studies. A study joins every
+# member of a set or none of it, so a difference between the pooled results of
+# two strata cannot be an artefact of which cohorts happen to be in each.
+#
+# Without this, ever pooled 10 studies and never pooled 8: Lung_01 (ever 314 /
+# never 57) and Ecvd_03 (ever 182 / never 73) cleared the threshold in one arm
+# only. A lung cancer cohort present in the ever arm and absent from the never
+# arm is exactly the confound that would masquerade as a smoking effect.
+#
+# Format: sets separated by ";", members by ",". Empty to disable.
+paired_strata:     "ever,never"
+
 # --- Chunking ---
 chunk_size:        100         # retained for backward compatibility; REGENIE now fans out one feature per job
 gwas_qc_batch_size: 10         # number of proteins handled per GWAS_QC task within each study-group

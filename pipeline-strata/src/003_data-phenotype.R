@@ -196,7 +196,9 @@ read_strata_params <- function(params_path) {
     })
     return(list(groups = groups,
                 min_n = as.integer(y$min_stratum_n %||% 100L),
-                pca_group = as.character(y$pca_group %||% "all")))
+                pca_group = as.character(y$pca_group %||% "all"),
+                paired = as.character(y$paired_strata %||% ""),
+                pca_gwas = as.character(y$pca_group_gwas %||% "true")))
   }
 
   # Fallback: the strata block has a fixed two-level shape that this script and
@@ -231,7 +233,9 @@ read_strata_params <- function(params_path) {
 
   list(groups = groups,
        min_n = as.integer(scalar("min_stratum_n", "100")),
-       pca_group = scalar("pca_group", "all"))
+       pca_group = scalar("pca_group", "all"),
+       paired = scalar("paired_strata", ""),
+       pca_gwas = scalar("pca_group_gwas", "true"))
 }
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -694,6 +698,28 @@ strata_defs <- sp$groups
 min_n       <- sp$min_n
 pca_group   <- sp$pca_group
 
+# Whether the PCA reference stratum also gets its own GWAS. When it does not, a
+# study whose only surviving group is the reference contributes nothing and is
+# skipped rather than paying for prep, variant QC, LD pruning and PCA.
+pca_gwas <- !(tolower(trimws(as.character(sp$pca_gwas)[1])) %in% c("false", "0", "no"))
+
+# Sets of strata that must share a study set. "a,b;c,d" -> list(c("a","b"), c("c","d"))
+paired_sets <- list()
+if (length(sp$paired) && nzchar(sp$paired[1])) {
+  paired_sets <- lapply(strsplit(strsplit(sp$paired[1], ";")[[1]], ","),
+                        function(v) trimws(v[nzchar(trimws(v))]))
+  paired_sets <- paired_sets[lengths(paired_sets) > 1]
+  for (set in paired_sets) {
+    unknown <- setdiff(set, names(strata_defs))
+    if (length(unknown)) {
+      stop("paired_strata references undefined strata: ", paste(unknown, collapse = ", "),
+           ". Defined: ", paste(names(strata_defs), collapse = ", "))
+    }
+  }
+  message("Paired strata (a study joins all members or none): ",
+          paste(vapply(paired_sets, paste, character(1), collapse = "+"), collapse = "; "))
+}
+
 if (!pca_group %in% names(strata_defs)) {
   stop("pca_group '", pca_group, "' in ", params_file,
        " is not a defined stratum (", paste(names(strata_defs), collapse = ", "), ").")
@@ -750,6 +776,28 @@ for (study in sort(unique(data_pheno$STUDY))) {
     }
     keep <- c(pca_group, keep)
   }
+  # Paired strata: drop a whole set unless every member clears min_n, so the
+  # strata being compared are pooled over identical studies.
+  for (set in paired_sets) {
+    if (!all(set %in% keep)) {
+      lost <- intersect(set, keep)
+      if (length(lost)) {
+        message(sprintf("    %s: dropping %s (paired with %s, below %d)",
+                        study, paste(lost, collapse = ","),
+                        paste(setdiff(set, keep), collapse = ","), min_n))
+      }
+      keep <- setdiff(keep, set)
+    }
+  }
+
+  analysed <- setdiff(keep, if (pca_gwas) character(0) else pca_group)
+  if (length(analysed) == 0) {
+    message(sprintf("  %s: SKIPPED -- no stratum of its own clears %d (%s)",
+                    study, min_n,
+                    paste(sprintf("%s=%d", names(counts), counts), collapse = " ")))
+    next
+  }
+
   keep <- unique(c(pca_group, keep))
 
   cat(sprintf("  %s: %s -> groups=%s\n", study,
