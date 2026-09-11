@@ -93,6 +93,14 @@ get_env <- function(key, default = NULL) {
 # and fall back to the code as a string when it does not. Recodes in
 # strata_spec can therefore be written against the human-readable levels.
 as_plain <- function(x) {
+  # FACTORS FIRST. as.character() on a factor yields the level LABELS;
+  # unclass() yields the integer level codes. The soma metadata stores
+  # smoke_statVV as a factor, so unclassing it turned Never/Former/Smoker into
+  # 1/2/3 and every recode matched nothing. table() shows a factor's labels,
+  # which is why the coding looked like strings in an interactive session.
+  if (is.factor(x)) return(trimws(as.character(x)))
+
+  # haven_labelled (SPSS): storage is integer codes, labels in attr "labels".
   labels <- attr(x, "labels", exact = TRUE)
 
   raw <- unclass(x)
@@ -108,11 +116,25 @@ as_plain <- function(x) {
   out
 }
 
-# Human-readable description of a column's value labels, for the run log.
+# Human-readable description of a column's levels, for the run log. When there
+# is no dictionary at all this prints the observed raw values, so a coding
+# mismatch is diagnosable from this one line without cross-referencing the
+# crosstab in the other log file.
 describe_labels <- function(x) {
+  if (is.factor(x)) {
+    return(paste0("factor with levels: ", paste(levels(x), collapse = ", ")))
+  }
   labels <- attr(x, "labels", exact = TRUE)
-  if (is.null(labels) || length(labels) == 0) return("(no SPSS value labels; using raw values)")
-  paste(sprintf("%s=%s", unname(labels), names(labels)), collapse = ", ")
+  if (!is.null(labels) && length(labels) > 0 && !is.null(names(labels))) {
+    return(paste0("SPSS value labels: ",
+                  paste(sprintf("%s=%s", unname(labels), names(labels)), collapse = ", ")))
+  }
+  plain <- unclass(x)
+  attributes(plain) <- NULL
+  observed <- sort(unique(trimws(as.character(plain))))
+  paste0("no label dictionary; observed values: ",
+         paste(utils::head(observed, 12), collapse = ", "),
+         if (length(observed) > 12) paste0(" ... (", length(observed), " distinct)") else "")
 }
 
 strata_spec <- list(
@@ -370,6 +392,18 @@ strata_source <- vapply(names(strata_spec), function(nm) {
 strata_active <- names(strata_source)[!is.na(strata_source)]
 message("\nGenotyped samples read from .psam files: ", nrow(data_genetic),
         " across ", dplyr::n_distinct(data_genetic$STUDY), " study file(s) under ", genetics_path)
+# 23 filesets but 22 studies in the last run: one .psam contributed no rows.
+# Name it rather than leaving the discrepancy to be spotted in the counts.
+studies_expected <- sort(unique(tools::file_path_sans_ext(basename(psam_files))))
+studies_read     <- sort(unique(data_genetic$STUDY))
+studies_missing  <- setdiff(studies_expected, studies_read)
+if (length(studies_missing)) {
+  warning(length(studies_missing), " fileset(s) contributed no samples and are ",
+          "absent from the analysis: ", paste(studies_missing, collapse = ", "),
+          ". Check whether the .psam is empty or unreadable.",
+          call. = FALSE, immediate. = TRUE)
+}
+
 if (nrow(data_genetic) < 500) {
   warning("Only ", nrow(data_genetic), " genotyped samples were found under ", genetics_path,
           ". The full EPIC analysis set is ~9,000. Check GWAS_GENETICS_DIR points at the ",
