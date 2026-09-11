@@ -1,6 +1,6 @@
 process GWAS_QC {
   label        'low'
-  conda        "${projectDir}/envs/py_qc.yml"
+  conda        "${projectDir}/../env/py_qc"
   publishDir   params.outdir, mode: 'rellink', saveAs: { name ->
     def parts = name.tokenize('/')
     def protein_id = parts ? parts[0] : "UNKNOWN"

@@ -1,6 +1,6 @@
 process META_STUDY {
   label        'medium'
-  conda        "${projectDir}/envs/py_qc.yml"
+  conda        "${projectDir}/../env/py_qc"
   publishDir   params.outdir, mode: 'copy', overwrite: true, saveAs: { name ->
     def metalDir = "meta/${protein_id}/012_METAL"
     def qcDir = "meta/${protein_id}/013_QC"

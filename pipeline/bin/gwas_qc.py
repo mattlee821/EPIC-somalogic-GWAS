@@ -64,13 +64,10 @@ def main():
 
     l_raw = calculate_lambda(df["P"])
 
-    # QC Filter
+    # QC Filter (INFO already filtered upstream at info_min; keep N >= 50% max)
     max_n = df["N"].max()
     if max_n is not None and max_n > 0:
-        df_filt = df.filter(
-            (pl.col("INFO") >= args.info_score) & 
-            (pl.col("N") >= 0.5 * max_n)
-        )
+        df_filt = df.filter(pl.col("N") >= 0.5 * max_n)
     else:
         df_filt = df
         

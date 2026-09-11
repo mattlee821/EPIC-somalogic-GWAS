@@ -1,10 +1,9 @@
 process REGENIE_STEP2 {
   label        'regenie_step2'
-  conda        "${projectDir}/envs/regenie.yml"
-  publishDir   params.outdir, mode: 'link', saveAs: { name ->
-    def m = (name =~ /.*_chr(\d+|X)_.+\.regenie\.gz$/)
-    def chr_id = m.size() > 0 ? m[0][1] : "UNKNOWN"
-    "${study_id}/${protein_id}/${group}/008_regenie-step2/chr${chr_id}.regenie.gz"
+  conda        "${projectDir}/../env/regenie"
+  publishDir   params.outdir, mode: params.publish_mode ?: 'link', saveAs: { name ->
+    // Single all-chromosome output per protein (full_<protein>.regenie.gz).
+    "${study_id}/${protein_id}/${group}/008_regenie-step2/${file(name).name}"
   }
 
   input:
@@ -15,6 +14,7 @@ process REGENIE_STEP2 {
 
   script:
   """
+  # cache-key: step2 single-pass all-chromosome run (v2)
   bash ${projectDir}/bin/run_regenie_step2.sh \\
     --pfile ${pfile} \\
     --sample_file ${sample_file} \\

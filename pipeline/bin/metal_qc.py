@@ -28,7 +28,7 @@ COLUMN_MAPPING = {
     "HetPVal": "HET_P",
 }
 
-STANDARD_COLS = ["CHR", "POS", "ID", "EA", "OA", "EAF", "BETA", "SE", "P", "N"]
+STANDARD_COLS = ["CHR", "POS", "ID", "RSID", "EA", "OA", "EAF", "BETA", "SE", "P", "N"]
 META_COLS = ["DIRECTION", "HET_ISQ", "HET_CHISQ", "HET_DF", "HET_P"]
 
 def normalize_col_name(name):
@@ -47,6 +47,12 @@ def parse_args():
     parser.add_argument("--group", required=True)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--n_file", default="")
+    parser.add_argument("--coord_file", default="",
+                        help="TSV (ID, CHR, POS) of authoritative coordinates "
+                             "from the per-study inputs, joined by ID.")
+    parser.add_argument("--rsid_file", default="",
+                        help="TSV (ID, RSID) mapping the canonical chr:pos:alleles "
+                             "key back to the original rsID, joined by ID.")
     parser.add_argument("--require_heterogeneity", action="store_true")
     return parser.parse_args()
 
@@ -153,6 +159,56 @@ def fill_n_from_file(df, n_file):
         df = df.drop("N_FROM_INPUTS")
     return df
 
+def fill_coords_from_file(df, coord_file):
+    """Join authoritative CHR/POS by ID from the per-study inputs.
+
+    METAL keeps only the marker ID, from which positions cannot be recovered for
+    rsIDs (and only fragilely for chr:pos:ref:alt IDs). The per-study sumstats
+    carry reliable CHR/POS (REGENIE CHROM/GENPOS), so we join those back by ID and
+    let them take precedence over anything parsed from the ID string.
+    """
+    if not coord_file or not os.path.exists(coord_file):
+        return df
+
+    c_df = pl.read_csv(coord_file, separator="\t", ignore_errors=True)
+    if not {"ID", "CHR", "POS"}.issubset(c_df.columns):
+        return df
+
+    c_df = c_df.select([
+        pl.col("ID").cast(pl.Utf8),
+        pl.col("CHR").cast(pl.Utf8).str.replace("(?i)^chr", "").alias("CHR_REF"),
+        pl.col("POS").cast(pl.Int64, strict=False).alias("POS_REF"),
+    ]).unique(subset=["ID"], keep="first")
+
+    df = df.with_columns(pl.col("ID").cast(pl.Utf8)).join(c_df, on="ID", how="left")
+
+    chr_sources = ["CHR_REF"] + (["CHR"] if "CHR" in df.columns else [])
+    pos_sources = ["POS_REF"] + (["POS"] if "POS" in df.columns else [])
+    df = df.with_columns([
+        pl.coalesce([pl.col(c).cast(pl.Utf8) for c in chr_sources]).alias("CHR"),
+        pl.coalesce([pl.col(c).cast(pl.Int64, strict=False) for c in pos_sources]).alias("POS"),
+    ]).drop(["CHR_REF", "POS_REF"])
+    return df
+
+def fill_rsid_from_file(df, rsid_file):
+    """Re-attach the original rsID by joining on the canonical chr:pos:alleles ID.
+
+    The meta MarkerName is the positional key (rsIDs collide on multiallelics, so
+    they cannot be the matching key); this restores the rsID as a separate column
+    for annotation/lookup. Variants with no rsID (chr:pos:ref:alt only) stay null.
+    """
+    if not rsid_file or not os.path.exists(rsid_file):
+        return df
+    r_df = pl.read_csv(rsid_file, separator="\t", ignore_errors=True)
+    if not {"ID", "RSID"}.issubset(r_df.columns):
+        return df
+    r_df = r_df.select([
+        pl.col("ID").cast(pl.Utf8),
+        pl.col("RSID").cast(pl.Utf8),
+    ]).unique(subset=["ID"], keep="first")
+    df = df.with_columns(pl.col("ID").cast(pl.Utf8)).join(r_df, on="ID", how="left")
+    return df
+
 def main():
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
@@ -174,6 +230,8 @@ def main():
         require_columns(df, META_COLS, "METAL heterogeneity output")
 
     df = fill_n_from_file(df, args.n_file)
+    df = fill_coords_from_file(df, args.coord_file)
+    df = fill_rsid_from_file(df, args.rsid_file)
 
     cast_exprs = []
     for col in ("P", "N", "EAF", "BETA", "SE", "HET_ISQ", "HET_CHISQ", "HET_DF", "HET_P"):
@@ -195,26 +253,28 @@ def main():
         needs_split = True
 
     if needs_split and "ID" in df.columns:
-        id_clean = df["ID"].cast(pl.Utf8).str.replace(":", "_")
+        # replace_all (not replace, which only swaps the first ':') so a
+        # chr:pos:ref:alt ID splits into [chr, pos, ref, alt] and POS = field 1.
+        id_clean = df["ID"].cast(pl.Utf8).str.replace_all(":", "_")
         id_parts = id_clean.str.split("_")
 
         new_cols = []
         if "CHR" not in df.columns:
-            new_cols.append(id_parts.list.get(0).str.replace("(?i)chr", "").alias("CHR"))
+            new_cols.append(id_parts.list.get(0, null_on_oob=True).str.replace("(?i)chr", "").alias("CHR"))
         elif df["CHR"].null_count() > 0:
             # Fill nulls only
             new_cols.append(pl.when(pl.col("CHR").is_null())
-                            .then(id_parts.list.get(0).str.replace("(?i)chr", ""))
+                            .then(id_parts.list.get(0, null_on_oob=True).str.replace("(?i)chr", ""))
                             .otherwise(pl.col("CHR").cast(pl.Utf8).str.replace("(?i)chr", ""))
                             .alias("CHR"))
         else:
              new_cols.append(pl.col("CHR").cast(pl.Utf8).str.replace("(?i)chr", "").alias("CHR"))
 
         if "POS" not in df.columns:
-            new_cols.append(id_parts.list.get(1).cast(pl.Int64, strict=False).alias("POS"))
+            new_cols.append(id_parts.list.get(1, null_on_oob=True).cast(pl.Int64, strict=False).alias("POS"))
         elif df["POS"].null_count() > 0:
             new_cols.append(pl.when(pl.col("POS").is_null())
-                            .then(id_parts.list.get(1).cast(pl.Int64, strict=False))
+                            .then(id_parts.list.get(1, null_on_oob=True).cast(pl.Int64, strict=False))
                             .otherwise(pl.col("POS"))
                             .alias("POS"))
         

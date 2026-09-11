@@ -1,6 +1,6 @@
 process REGENIE_STEP1 {
   label        'regenie_step1'
-  conda        "${projectDir}/envs/regenie.yml"
+  conda        "${projectDir}/../env/regenie"
   publishDir   { "${params.outdir}/${study_id}/${protein_id}/${group}/007_regenie-step1" }, mode: 'copy'
 
   input:

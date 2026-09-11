@@ -1,10 +1,10 @@
 process LD_PRUNING {
   label        'medium'
-  conda        "${projectDir}/envs/plink2.yml"
+  conda        "${projectDir}/../env/plink2"
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/006_ld-pruning" }, mode: 'copy'
 
   input:
-  tuple val(study_id), val(group), val(pfile_prefix), path(qc_samples), path(qc_variants), val(ld_window_kb), val(ld_step), val(ld_r2)
+  tuple val(study_id), val(group), val(pfile_prefix), path(qc_samples), path(qc_variants), val(maf), val(ld_window_kb), val(ld_step), val(ld_r2)
 
   output:
   tuple val(study_id), val(group), path("step1_input.pgen"), path("step1_input.pvar"), path("step1_input.psam")
@@ -19,6 +19,7 @@ process LD_PRUNING {
     --window ${ld_window_kb} \\
     --step ${ld_step} \\
     --r2 ${ld_r2} \\
+    --maf ${maf} \\
     --outdir .
   """
 }

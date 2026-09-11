@@ -1,6 +1,6 @@
 process VALIDATE_INPUTS {
   label        'low'
-  conda        "${projectDir}/envs/py_validate.yml"
+  conda        "${projectDir}/../env/py_validate"
   publishDir   "${params.outdir}/_shared/001_validation", mode: 'copy'
 
   input:

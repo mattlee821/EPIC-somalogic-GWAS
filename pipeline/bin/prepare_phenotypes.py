@@ -46,12 +46,26 @@ def main() -> None:
     pheno = ensure_string_ids(pheno, ("IID",))
     samples = ensure_string_ids(samples, ("IID",))
 
+    # Restrict to the samples assigned to THIS study by the cross-study dedup
+    # (003). The phenotype file lists each person once with their assigned STUDY;
+    # a person genotyped in several studies shares the same IID (Idepic_Bio) across
+    # those studies' .psam files, so without this filter they would match every
+    # such study by IID and be analysed — and counted in the meta N — multiple
+    # times, silently undoing the dedup.
+    if "STUDY" in pheno.columns:
+        pheno = pheno[pheno["STUDY"].astype(str) == str(args.study_id)].copy()
+        if pheno.empty:
+            raise ValueError(f"No phenotype rows assigned to study '{args.study_id}'.")
+
     common_samples = pd.Index(pheno["IID"].dropna().unique()).intersection(samples["IID"].dropna().unique())
     if common_samples.empty:
         raise ValueError("Zero overlap found.")
 
     pheno = pheno[pheno["IID"].isin(common_samples)].copy()
-    pheno.insert(0, "FID", "0")
+    # The PLINK2 .psam from the imputation pipeline uses FID == IID, and plink2
+    # --keep / REGENIE match on FID+IID. Setting FID = IID (not "0") makes the
+    # keep, phenotype, and covariate files join correctly against the genotypes.
+    pheno.insert(0, "FID", pheno["IID"])
     pheno = pheno[["FID", "IID"] + [col for col in pheno.columns if col not in {"FID", "IID"}]]
 
     all_columns = list(pheno.columns)

@@ -158,12 +158,24 @@ def main():
                     chrom for chrom in requested_chromosomes
                     if chrom not in observed_chromosomes
                 ]
-                if missing_chromosomes:
+                # A missing autosome is a real data problem (hard fail). A missing
+                # sex/mito chromosome (X/23, Y/24, MT/26) is tolerated: some cohorts
+                # legitimately lack it (e.g. sex-specific cancer studies) and
+                # REGENIE step 2 guards per study, skipping absent chromosomes.
+                sex_mito = {"X", "23", "Y", "24", "MT", "M", "26"}
+                missing_autosomes = [c for c in missing_chromosomes if c not in sex_mito]
+                missing_sexmito = [c for c in missing_chromosomes if c in sex_mito]
+                if missing_autosomes:
                     report(
-                        f"FAIL: Requested chromosome(s) absent from {pfile_prefix}.pvar for {sid}: {', '.join(missing_chromosomes)}",
+                        f"FAIL: Requested autosome(s) absent from {pfile_prefix}.pvar for {sid}: {', '.join(missing_autosomes)}",
                         is_error=True,
                     )
                     error_found = True
+                if missing_sexmito:
+                    report(
+                        f"WARNING: Requested chromosome(s) absent from {pfile_prefix}.pvar for {sid}: {', '.join(missing_sexmito)} (skipped for this study)",
+                        is_error=False,
+                    )
 
         # 3. Phenotype Header
         if not check_file_exists(args.phenotype_file, "Phenotype file"):

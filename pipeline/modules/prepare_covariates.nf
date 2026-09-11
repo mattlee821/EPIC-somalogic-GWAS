@@ -1,6 +1,6 @@
 process PREPARE_COVARIATES {
   label        'low'
-  conda        "${projectDir}/envs/py_prep.yml"
+  conda        "${projectDir}/../env/py_prep"
 
   input:
   tuple val(study_id), val(group), path(covariate_file), path(sample_file), val(group_column), val(cases_value), val(include_covariates), val(include_proteins)
@@ -10,6 +10,7 @@ process PREPARE_COVARIATES {
 
   script:
   """
+  # cache-key: prepare_covariates FID=IID + per-study STUDY filter (v3)
   python ${projectDir}/bin/prepare_covariates.py \\
     --covariate_file ${covariate_file} \\
     --sample_file ${sample_file} \\

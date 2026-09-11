@@ -1,6 +1,6 @@
 process PREPARE_PHENOTYPES {
   label        'low'
-  conda        "${projectDir}/envs/py_prep.yml"
+  conda        "${projectDir}/../env/py_prep"
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/002_prepare-phenotypes" }, mode: 'copy'
 
   input:
@@ -12,6 +12,7 @@ process PREPARE_PHENOTYPES {
 
   script:
   """
+  # cache-key: prepare_phenotypes FID=IID + per-study STUDY filter (v3)
   python ${projectDir}/bin/prepare_phenotypes.py \\
     --phenotype_file phenotype_input.txt \\
     --sample_file ${sample_file} \\

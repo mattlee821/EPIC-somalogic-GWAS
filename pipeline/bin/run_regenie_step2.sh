@@ -92,7 +92,10 @@ fi
 
 # REGENIE 4.x requires #FID as the first column and IID as the second column.
 ORIG_PSAM="${pgen_prefix}.psam"
-header=$(grep -v '^##' "$ORIG_PSAM" | head -n 1)
+# Read the first non-## line in a single awk (exit after match) rather than
+# `grep -v '^##' | head -1`: with pipefail, head closing the pipe early sends
+# SIGPIPE to grep on large psams, which would abort the script (exit 141).
+header=$(awk '!/^##/{print; exit}' "$ORIG_PSAM")
 
 if [[ "$header" != \#FID$'\t'IID* && "$header" != "#FID IID"* ]]; then
     echo ">>> Fixing PSAM header for REGENIE compatibility..."
@@ -149,36 +152,33 @@ PY
     pgen_prefix="${FIXED_PREFIX}"
 fi
 
-IFS=',' read -r -a chr_array <<< "$chromosomes"
+# Run REGENIE step 2 ONCE over the whole pgen, not once per chromosome. regenie
+# processes every chromosome present in the pgen in a single pass, so a study that
+# lacks a chromosome (e.g. X in some cohorts) simply has no variants for it and is
+# handled without error -- no per-chromosome loop or guard is needed. The previous
+# loop re-read the entire ~11M-variant pgen once per chromosome (~22x redundant
+# NFS reads per task); under many concurrent step-2 jobs that saturated scratch IO
+# and blew past the wall-time limit. One pass writes a single all-chromosome
+# output (full_<phenotype>.regenie.gz), which GWAS_QC consumes directly.
+# (--chromosomes is still accepted for interface compatibility but not used.)
+log_file="${outdir}/step2.log"
+cmd=(regenie --step 2 --threads "${threads}"
+    --pgen "${pgen_prefix}"
+    --phenoFile "${pheno_file}"
+    --covarFile "${cov_file}"
+    --pred "${pred_list}"
+    --bsize "${bsize}"
+    --qt
+    --gz
+    --out "${outdir}/full")
 
-for chr in "${chr_array[@]}"; do
-    chr="${chr//[[:space:]]/}"
-    [[ -n "$chr" ]] || continue
+printf 'Running: %q ' "${cmd[@]}" | tee "$log_file"
+printf '\n' | tee -a "$log_file"
 
-    log_file="${outdir}/step2_chr${chr}.log"
-    cmd=(regenie --step 2 --threads "${threads}")
+if ! "${cmd[@]}" >> "$log_file" 2>&1; then
+    echo "ERROR: REGENIE Step 2 failed. Log follows:"
+    cat "$log_file"
+    exit 1
+fi
 
-    cmd+=(--pgen "${pgen_prefix}")
-
-    cmd+=(
-        --phenoFile "${pheno_file}"
-        --covarFile "${cov_file}"
-        --pred "${pred_list}"
-        --chr "${chr}"
-        --bsize "${bsize}"
-        --qt
-        --gz
-        --out "${outdir}/full_chr${chr}"
-    )
-
-    printf 'Running: %q ' "${cmd[@]}" | tee "$log_file"
-    printf '\n' | tee -a "$log_file"
-
-    if ! "${cmd[@]}" >> "$log_file" 2>&1; then
-        echo "ERROR: REGENIE Step 2 failed. Log follows:"
-        cat "$log_file"
-        exit 1
-    fi
-done
-
-echo "REGENIE Step 2 for $study ($group) complete across chromosomes: $chromosomes"
+echo "REGENIE Step 2 for $study ($group) complete (all chromosomes in one pass)."

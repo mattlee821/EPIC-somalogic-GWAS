@@ -7,6 +7,8 @@ __pycache__/
 work/
 src/test/
 tools/
+# Prebuilt conda environments (built by src/001_source.sh)
+/env/
 
 # Configuration
 .env
@@ -56,3 +58,11 @@ pipeline/samplesheet.csv
 *.rds
 *.metrics.tsv
 *.metrics.csv
+
+# Bulk GWAS outputs (per-protein staged sumstats, ~466 MB each) and run logs.
+# Small summary tables (all_metrics.tsv, metrics_ldsc-herit.tsv,
+# staging_manifest.tsv) are kept as provenance.
+/analysis/*.tsv.gz
+/analysis/**/*.tsv.gz
+/pipeline/results/
+/src/logs/

@@ -2,28 +2,27 @@
 set -euo pipefail
 
 pfile=""
-keep=""
 study=""
 maf=""
-hwe=""
-geno=""
+info_min=""
 outdir=""
 
+# Sample exclusions (ancestry/related) and HWE flagging are performed upstream by
+# the imputation pipeline and already applied to the merged pfile by 002. Variant
+# QC here therefore only applies the MAF and imputation-quality (R2) filters.
 while [[ $# -gt 0 ]]; do
   case $1 in
     --pfile) pfile="$2"; shift 2 ;;
-    --keep) keep="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
     --maf) maf="$2"; shift 2 ;;
-    --hwe) hwe="$2"; shift 2 ;;
-    --geno) geno="$2"; shift 2 ;;
+    --info_min) info_min="$2"; shift 2 ;;
     --outdir) outdir="$2"; shift 2 ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
 done
 
-if [[ -z "$pfile" || -z "$keep" || -z "$study" || -z "$maf" || -z "$hwe" || -z "$geno" || -z "$outdir" ]]; then
-  echo "Usage: $0 --pfile <prefix> --keep <val> --study <val> --maf <val> --hwe <val> --geno <val> --outdir <val>"
+if [[ -z "$pfile" || -z "$study" || -z "$maf" || -z "$info_min" || -z "$outdir" ]]; then
+  echo "Usage: $0 --pfile <prefix> --study <val> --maf <val> --info_min <val> --outdir <val>"
   exit 1
 fi
 
@@ -41,10 +40,8 @@ exec > >(tee -a "$log_file") 2>&1
 echo "Starting variant QC for $study using PLINK2 prefix $pfile..."
 
 plink2 --pfile "$pfile" \
-  --keep "$keep" \
   --maf "$maf" \
-  --hwe "$hwe" \
-  --geno "$geno" \
+  --extract-if-info "R2 >= $info_min" \
   --write-snplist \
   --out "${outdir}/variant_qc_pass"
 

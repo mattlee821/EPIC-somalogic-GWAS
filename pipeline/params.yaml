@@ -10,7 +10,10 @@ include_proteins:  ""          # comma-separated list of protein column names, o
 covariates:        ""          # comma-separated list of covariates (e.g. Age_Recr,Sex), or "" for all non-IID/FID columns
 
 # --- Analysis groups ---
-analysis_groups:   ["cases", "controls"]
+# Per-study groups are normally taken from the samplesheet 'analysis_groups'
+# column (written by 004 from per-arm counts). This list is only the fallback for
+# samplesheets without that column.
+analysis_groups:   ["combined", "cases", "controls"]
 
 # --- Chunking ---
 chunk_size:        100         # retained for backward compatibility; REGENIE now fans out one feature per job
@@ -19,11 +22,10 @@ gwas_qc_batch_size: 10         # number of proteins handled per GWAS_QC task wit
 # --- QC thresholds ---
 maf:               0.01
 hwe:               1e-15
-geno:              0.05
-mind:              0.05
+info_min:          0.6
 info_score:        0.3
-meta_group:       false
-meta_study:       false
+meta_group:       false        # within-study cases+controls METAL meta (redundant with 'combined')
+meta_study:       "combined"   # cross-study meta is run on the combined GWAS only
 king_cutoff:       0.0884      # 2nd-degree relatedness
 
 # --- LD pruning ---
@@ -38,5 +40,26 @@ regenie_bsize_step2:  400
 # --- METAL ---
 metal_binary:      "tools/metal/metal"   # resolved relative to pipeline/ unless given as an absolute path
 
+# --- LDSC (intercept + SNP-h2 on each cross-study meta) ---
+# Data installed by:  bash src/004_ldsc-herit.sh --reference   (shared, under data/reference/).
+# The python env (env/ldsc) is prebuilt by src/001_source.sh. Set ldsc:false to skip.
+ldsc:              true
+ldsc_home:         "/WHERE/epic-gwas/data/reference/ldsc"          # LDSC source (munge_sumstats.py, ldsc.py)
+ldsc_ref_dir:      "/WHERE/epic-gwas/data/reference/eur_w_ld_chr"  # EUR LD scores (Zenodo 10515792)
+ldsc_hm3:          "/WHERE/epic-gwas/data/reference/w_hm3.snplist" # HapMap3 (no-MHC) SNP list
+
+# --- Heritability decomposition (UKB-PPP style: pQTL component + polygenic) ---
+# Data built by:  bash src/004_ldsc-herit.sh   (gene map + LD reference, under data/herit/).
+herit:             true
+protein_gene_map:  "/WHERE/epic-gwas/data/herit/protein_gene_map.tsv"  # built by 004 --protein-map
+ld_ref_pfile:      "/WHERE/epic-gwas/data/herit/ldref"   # bed/bim/fam prefix; "" => distance-based clumping
+cis_window_kb:     1000          # cis = index pQTL within +/-1 Mb of the gene encoding the protein
+herit_p:           5.0e-8        # genome-wide threshold for an index pQTL (set 5e-8/n_proteins for study-wide)
+herit_clump_r2:    0.1           # PLINK --clump-r2 for independent index pQTLs
+hla_region:        "6:25500000:34000000"   # excluded from clumping + polygenic fit (chr:start:end, hg38)
+
 # --- Chromosomes ---
-chromosomes:       [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]
+# Autosomes 1-22 plus X. X is present in the imputation output and merged by 002.
+# REGENIE step 1 (LD-pruned predictor) and step 2 both include X; Sex is supplied
+# as a covariate for correct chromosome-X handling.
+chromosomes:       [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,"X"]

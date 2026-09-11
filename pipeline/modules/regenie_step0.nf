@@ -1,6 +1,6 @@
 process REGENIE_STEP0 {
   label        'regenie_step0'
-  conda        "${projectDir}/envs/regenie.yml"
+  conda        "${projectDir}/../env/regenie"
   publishDir   params.outdir, mode: 'copy', saveAs: { name ->
     if (name == "regenie_step0.master" || name == "step0_split.log" || name ==~ /step0_l0_job\d+\.log/) {
       return "${study_id}/_shared/${group}/006b_regenie-step0/${name}"

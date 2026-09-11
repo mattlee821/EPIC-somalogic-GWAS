@@ -5,9 +5,7 @@ nextflow.enable.dsl=2
 include { VALIDATE_INPUTS } from './modules/validate_inputs.nf'
 include { PREPARE_PHENOTYPES } from './modules/prepare_phenotypes.nf'
 include { PREPARE_COVARIATES } from './modules/prepare_covariates.nf'
-include { SAMPLE_QC } from './modules/sample_qc.nf'
 include { VARIANT_QC } from './modules/variant_qc.nf'
-include { STAGE_SAMPLE_QC } from './modules/stage_sample_qc.nf'
 include { STAGE_VARIANT_QC } from './modules/stage_variant_qc.nf'
 include { LD_PRUNING } from './modules/ld_pruning.nf'
 include { PCA } from './modules/pca.nf'
@@ -18,6 +16,8 @@ include { REGENIE_STEP2 } from './modules/regenie_step2.nf'
 include { GWAS_QC } from './modules/gwas_qc.nf'
 include { META_STUDY } from './modules/meta_study.nf'
 include { META_GROUP } from './modules/meta_group.nf'
+include { LDSC } from './modules/ldsc.nf'
+include { HERITABILITY } from './modules/heritability.nf'
 include { COHORT_SUMMARY } from './modules/cohort_summary.nf'
 
 workflow {
@@ -50,16 +50,24 @@ workflow {
         .collect()
         .map { study_ids -> study_ids.size() }
 
-    // 3. Prepare covariates and phenotypes (branched by analysis groups)
-    def groups = params.analysis_groups
-    def ch_groups = Channel.fromList(groups)
-
-    ch_studies
-        .combine(Channel.fromList(groups))
+    // 3. Prepare covariates and phenotypes, branched by each study's own analysis
+    //    groups. The group list comes from the samplesheet 'analysis_groups' column
+    //    (set by 004 from per-arm sample counts); it falls back to
+    //    params.analysis_groups for samplesheets without that column.
+    def ch_study_group = ch_studies
+        .flatMap { row ->
+            def grps = (row.analysis_groups && row.analysis_groups.trim()) ?
+                row.analysis_groups.split(',').collect { it.trim() }.findAll { it } :
+                params.analysis_groups
+            grps.collect { g -> tuple(row, g) }
+        }
         .filter { row, group ->
+            // a non-combined group still requires a group column to split on
             if (group == "combined") return true
             return (row.group_column && row.group_column.trim() != "")
         }
+
+    ch_study_group
         .map { row, group ->
             tuple(
                 row.study_id,
@@ -75,12 +83,7 @@ workflow {
         }
         .set { ch_pheno_inputs }
 
-    ch_studies
-        .combine(Channel.fromList(groups))
-        .filter { row, group ->
-            if (group == "combined") return true
-            return (row.group_column && row.group_column.trim() != "")
-        }
+    ch_study_group
         .map { row, group ->
             tuple(row.study_id, group, cov_file, file(row.sample_file), row.group_column, row.cases_value, params.covariates, params.include_proteins)
         }
@@ -89,45 +92,47 @@ workflow {
     PREPARE_PHENOTYPES(ch_pheno_inputs)
     PREPARE_COVARIATES(ch_cov_inputs)
 
-    // 4. Genetic QC per study (independent of analysis groups)
-    ch_studies.map { row -> tuple(row.study_id, row.pfile, params.mind, params.king_cutoff) } | SAMPLE_QC
+    // 4. Variant QC per study. Sample exclusions (ancestry/relatedness) and HWE
+    //    flagging were performed upstream by the imputation pipeline; 002 already
+    //    merged the exclusions into the per-study pfile. Variant QC here only
+    //    applies the MAF and imputation-quality (R2) filters. (Ancestry PCs are
+    //    recomputed on the analysis subset below, not reused from upstream.)
+    //    VARIANT_QC takes [sid, pfile, maf, info_min]
+    VARIANT_QC(ch_studies.map { row -> tuple(row.study_id, row.pfile, params.maf, params.info_min) })
 
-    // combine SAMPLE_QC (sid, qc_pass_samples.txt) with original pfile
-    ch_studies_with_qc = ch_studies.map { row -> tuple(row.study_id, row.pfile) }
-                                   .join(SAMPLE_QC.out, by: 0) // [sid, pfile, pass_samples]
-
-    // VARIANT_QC takes [sid, pfile, qc_samples, maf, hwe, geno]
-    VARIANT_QC(ch_studies_with_qc.map { sid, pfile, qcs -> tuple(sid, pfile, qcs, params.maf, params.hwe, params.geno) })
-
-    // Stage study-level QC outputs into each group directory
-    STAGE_SAMPLE_QC(
-        SAMPLE_QC.out.combine(ch_groups)
-                    .map { sid, qc_file, grp -> tuple(sid, grp, qc_file) }
-    )
+    // Stage variant QC output into each group directory this study runs
+    def ch_sid_group = ch_study_group.map { row, group -> tuple(row.study_id, group) }
     STAGE_VARIANT_QC(
-        VARIANT_QC.out.combine(ch_groups)
+        VARIANT_QC.out.combine(ch_sid_group, by: 0)
                      .map { sid, qc_var, grp -> tuple(sid, grp, qc_var) }
     )
 
-    // 4b. Identify intersection of QCed samples and phenotyped samples for LD pruning
+    // 4b. Intersect the variant-QC pass set with phenotyped samples for LD pruning
     pheno_samples = PREPARE_PHENOTYPES.out[0].map { sid, grp, feature_files, full, manifest, keep -> tuple(sid, grp, keep) }
 
-    ch_for_ld = ch_studies_with_qc.join(VARIANT_QC.out, by: 0)
-                                  .combine(pheno_samples, by: 0)
-                                  .map { sid, pfile, qcs_g, qcv_g, grp, qcs_p ->
-                                      tuple(sid, grp, pfile, qcs_p, qcv_g, params.ld_window_kb, params.ld_step, params.ld_r2)
-                                  }
+    ch_for_ld = ch_studies.map { row -> tuple(row.study_id, row.pfile) }
+                          .join(VARIANT_QC.out, by: 0)            // [sid, pfile, qc_variants]
+                          .combine(pheno_samples, by: 0)          // [sid, pfile, qc_variants, grp, keep]
+                          .map { sid, pfile, qcv, grp, keep ->
+                              tuple(sid, grp, pfile, keep, qcv, params.maf, params.ld_window_kb, params.ld_step, params.ld_r2)
+                          }
 
     LD_PRUNING(ch_for_ld)
 
-    // 4c. Compute PCs on the step1 input and merge into covariates
-    PCA(LD_PRUNING.out.map { sid, grp, pgen, pvar, psam -> tuple(sid, grp, pgen, pvar, psam) })
+    // 4c. Recompute ancestry PCs on the analysis subset (proteomics-matched,
+    //     deduped, study >= min N). The staged upstream eigenvec/eigenval were
+    //     computed on the FULL study, so they are intentionally not used here.
+    //     PCs are computed once per study on the COMBINED LD-pruned set (the full
+    //     analysis sample) and reused across the cases/controls arms — never
+    //     computed within an arm, which could absorb true association signal.
+    def ch_pca_in = LD_PRUNING.out.filter { sid, grp, pgen, pvar, psam -> grp == 'combined' }
+    PCA(ch_pca_in)
 
-    def cov_for_pcs = PREPARE_COVARIATES.out.map { sid, grp, cov -> tuple("${sid}_${grp}", sid, grp, cov) }
-    def pcs_for_cov = PCA.out.map { sid, grp, pvec, pval -> tuple("${sid}_${grp}", pvec, pval) }
+    def ch_study_pcs = PCA.out.map { sid, grp, pvec, pval -> tuple(sid, pvec, pval) }
 
-    def cov_with_pcs_in = cov_for_pcs.join(pcs_for_cov, by: 0)
-                                     .map { key, sid, grp, cov, pvec, pval -> tuple(sid, grp, cov, pvec, pval) }
+    def cov_with_pcs_in = PREPARE_COVARIATES.out
+        .combine(ch_study_pcs, by: 0)                            // [sid, grp, cov, eigenvec, eigenval]
+        .map { sid, grp, cov, pvec, pval -> tuple(sid, grp, cov, pvec, pval) }
 
     ADD_PCS(cov_with_pcs_in)
 
@@ -213,20 +218,31 @@ workflow {
         throw new IllegalArgumentException("params.gwas_qc_batch_size must be >= 1")
     }
 
+    // Batch deterministically: groupTuple(size:) chunks on SLURM *arrival* order,
+    // so both batch membership and within-batch ordering vary run-to-run. That
+    // changes the GWAS_QC task hash (prot_ids/files/mapping) every run, so it
+    // never caches even though all STEP2 inputs are cached. Instead collect the
+    // full per-(study,group) group, sort by protein_id, then slice into fixed
+    // chunks -> identical batches every run -> cacheable on -resume.
     ch_gwas_qc_in = ch_grouped_regenie
         .map { sid, grp, prot, fs ->
             def files = (fs instanceof java.util.Collection ? fs : [fs])
             tuple("${sid}__${grp}", sid, grp, prot.toString(), files)
         }
-        .groupTuple(by: 0, size: gwas_qc_batch_size, remainder: true)
-        .map { key, sids, grps, prots, file_sets ->
-            def prot_ids = prots.collect { it.toString() }
-            def files = file_sets.collectMany { it instanceof java.util.Collection ? it : [it] }
-            def mapping = (0..<prot_ids.size()).collect { idx ->
-                def prot_files = file_sets[idx] instanceof java.util.Collection ? file_sets[idx] : [file_sets[idx]]
-                "${prot_ids[idx]}:${prot_files.collect { it.name }.join(',')}"
-            }.join('\n')
-            tuple(sids[0].toString(), grps[0].toString(), prot_ids, files, mapping)
+        .groupTuple(by: 0)
+        .flatMap { key, sids, grps, prots, file_sets ->
+            def rows = (0..<prots.size())
+                .collect { i -> [prots[i].toString(), file_sets[i], sids[i].toString(), grps[i].toString()] }
+                .sort { a, b -> a[0] <=> b[0] }
+            rows.collate(gwas_qc_batch_size).collect { batch ->
+                def prot_ids = batch.collect { it[0] }
+                def files = batch.collectMany { it[1] instanceof java.util.Collection ? it[1] : [it[1]] }
+                def mapping = batch.collect { row ->
+                    def prot_files = row[1] instanceof java.util.Collection ? row[1] : [row[1]]
+                    "${row[0]}:${prot_files.collect { it.name }.join(',')}"
+                }.join('\n')
+                tuple(batch[0][2], batch[0][3], prot_ids, files, mapping)
+            }
         }
 
     GWAS_QC(ch_gwas_qc_in)
@@ -295,6 +311,11 @@ workflow {
     def meta_study_raw = params.meta_study
     def meta_study_enabled = meta_study_raw && !(meta_study_raw.toString().trim().toLowerCase() in ['false', '0', 'no'])
 
+    // Per-protein LDSC / heritability rows, merged to one file each (or null when
+    // disabled). COHORT_SUMMARY joins them into metrics_ldsc-herit.tsv.
+    def ch_ldsc_summary = null
+    def ch_herit_summary = null
+
     if (meta_study_enabled) {
         def meta_study_list = meta_study_raw.toString().split(',').collect { it.trim().toLowerCase() }.findAll { it }
         if (meta_study_list == ["true"] || meta_study_list == ["1"]) meta_study_list = ["meta"]
@@ -316,6 +337,29 @@ workflow {
             .set { ch_meta_study_in }
 
         META_STUDY(ch_meta_study_in)
+
+        // 9b. LDSC intercept + SNP-h2 on each cross-study meta sumstats.
+        //     Diagnostic: intercept ~1 => the meta lambda inflation is polygenic,
+        //     not confounding/stratification. Runs per protein; rows are merged
+        //     and handed to COHORT_SUMMARY for the combined metrics_ldsc-herit.tsv.
+        def ldsc_enabled = params.ldsc && !(params.ldsc.toString().trim().toLowerCase() in ['false', '0', 'no'])
+        if (ldsc_enabled) {
+            LDSC(
+                META_STUDY.out.all_out.map { study, grp, prot, gwas, met -> tuple(grp, prot, gwas) }
+            )
+            ch_ldsc_summary = LDSC.out.row.collectFile(name: 'ldsc_rows.tsv', keepHeader: true, skip: 1, sort: true)
+        }
+
+        // 9c. Heritability decomposition (UKB-PPP style): per-protein total SNP-h2
+        //     = pQTL component (cis/trans variance from clumped index pQTLs)
+        //     + polygenic component (LDSC --h2 on the region-excluded genome).
+        def herit_enabled = params.herit && !(params.herit.toString().trim().toLowerCase() in ['false', '0', 'no'])
+        if (herit_enabled) {
+            HERITABILITY(
+                META_STUDY.out.all_out.map { study, grp, prot, gwas, met -> tuple(grp, prot, gwas) }
+            )
+            ch_herit_summary = HERITABILITY.out.row.collectFile(name: 'herit_rows.tsv', keepHeader: true, skip: 1, sort: true)
+        }
     }
 
     // 10. Cohort summary
@@ -330,5 +374,13 @@ workflow {
     }
 
     def ch_metrics_list = ch_metrics_all.collectFile(name: 'metrics_list.txt', newLine: true)
-    COHORT_SUMMARY(ch_metrics_list)
+
+    // LDSC/herit are optional: pass an empty placeholder when a side is disabled
+    // so COHORT_SUMMARY still runs and writes all_metrics.tsv.
+    def no_file = file("${projectDir}/assets/NO_FILE")
+    COHORT_SUMMARY(
+        ch_metrics_list,
+        ch_ldsc_summary  ?: Channel.value(no_file),
+        ch_herit_summary ?: Channel.value(no_file)
+    )
 }

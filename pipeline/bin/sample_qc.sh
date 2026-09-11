@@ -4,7 +4,6 @@ set -euo pipefail
 POSITIONAL_ARGS=()
 pfile=""
 study=""
-mind=""
 king=""
 keep=""
 outdir=""
@@ -13,7 +12,6 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --pfile) pfile="$2"; shift 2 ;;
     --study) study="$2"; shift 2 ;;
-    --mind) mind="$2"; shift 2 ;;
     --king) king="$2"; shift 2 ;;
     --keep) keep="$2"; shift 2 ;;
     --outdir) outdir="$2"; shift 2 ;;
@@ -21,8 +19,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$pfile" || -z "$study" || -z "$mind" || -z "$king" || -z "$outdir" ]]; then
-  echo "Usage: $0 --pfile <prefix> --study <val> --mind <val> --king <val> --outdir <val> [--keep <file>]" >&2
+if [[ -z "$pfile" || -z "$study" || -z "$king" || -z "$outdir" ]]; then
+  echo "Usage: $0 --pfile <prefix> --study <val> --king <val> --outdir <val> [--keep <file>]" >&2
   exit 1
 fi
 
@@ -48,23 +46,15 @@ if [[ -n "$keep" && -f "$keep" ]]; then
     KEEP_ARG="--keep $keep"
 fi
 
-# Step 1: Mind filter
-echo ">>> Step 1: Call rate filter (--mind $mind)"
+# Step 1: Heterozygosity
+echo ">>> Step 1: Heterozygosity check"
 plink2 --pfile "$pfile" \
   $KEEP_ARG \
-  --mind "$mind" \
-  --make-just-fam \
-  --out "${outdir}/mind_pass"
-
-# Step 2: Heterozygosity
-echo ">>> Step 2: Heterozygosity check"
-plink2 --pfile "$pfile" \
-  --keep "${outdir}/mind_pass.fam" \
   --indep-pairwise 200 50 0.25 \
   --out "${outdir}/het_ld_temp"
 
 plink2 --pfile "$pfile" \
-  --keep "${outdir}/mind_pass.fam" \
+  $KEEP_ARG \
   --extract "${outdir}/het_ld_temp.prune.in" \
   --het \
   --out "${outdir}/het"
@@ -130,8 +120,8 @@ with out_path.open("w", newline="") as handle:
                 writer.writerow([row[iid_col]])
 EOF
 
-# Step 3: King cutoff
-echo ">>> Step 3: Relatedness filter (--king-cutoff $king)"
+# Step 2: Relatedness filter (--king-cutoff $king)
+echo ">>> Step 2: Relatedness filter (--king-cutoff $king)"
 plink2 --pfile "$pfile" \
   --keep "${outdir}/het_pass.txt" \
   --king-cutoff "$king" \

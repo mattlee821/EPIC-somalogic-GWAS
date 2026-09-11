@@ -1,6 +1,6 @@
 process ADD_PCS {
   label        'low'
-  conda        "${projectDir}/envs/py_validate.yml"
+  conda        "${projectDir}/../env/py_validate"
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/003_prepare-covariates" }, mode: 'copy'
 
   input:

@@ -1,0 +1,19 @@
+name: herit
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Heritability-decomposition module: PLINK 1.9 (--clump for independent index
+  # pQTLs), PLINK 2 (build/subset the LD reference), and the LDSC python deps for
+  # the polygenic-remainder --h2 fit. `requests` is used by the one-time
+  # build_protein_gene_map.py (MyGene.info) helper. The LDSC source + EUR panel
+  # are installed by src/006_ldsc_intercept.sh --setup (not conda packages).
+  - python=3.10
+  - numpy
+  - scipy
+  - pandas
+  - bitarray
+  - requests
+  - plink
+  - plink2

@@ -1,6 +1,6 @@
 process META_GROUP {
   label        'medium'
-  conda        "${projectDir}/envs/py_qc.yml"
+  conda        "${projectDir}/../env/py_qc"
   publishDir   params.outdir, mode: 'rellink', saveAs: { name ->
     def metalDir = "${study_id}/${protein_id}/meta/010_METAL"
     def qcDir = "${study_id}/${protein_id}/meta/011_QC"

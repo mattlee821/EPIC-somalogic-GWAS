@@ -50,12 +50,22 @@ def main() -> None:
     covariates = ensure_string_ids(covariates, ("IID",))
     samples = ensure_string_ids(samples, ("IID",))
 
+    # Restrict to samples assigned to THIS study by the cross-study dedup (003),
+    # mirroring prepare_phenotypes. Without it, a person genotyped in several
+    # studies (shared Idepic_Bio IID) is matched into every study, undoing dedup.
+    if "STUDY" in covariates.columns:
+        covariates = covariates[covariates["STUDY"].astype(str) == str(args.study_id)].copy()
+        if covariates.empty:
+            raise ValueError(f"No covariate rows assigned to study '{args.study_id}'.")
+
     common_samples = pd.Index(covariates["IID"].dropna().unique()).intersection(samples["IID"].dropna().unique())
     if common_samples.empty:
         raise ValueError("Zero overlap found.")
 
     covariates = covariates[covariates["IID"].isin(common_samples)].copy()
-    covariates.insert(0, "FID", "0")
+    # Match the .psam convention (FID == IID) so plink2 --keep / REGENIE join on
+    # FID+IID succeed; a hardcoded FID of "0" would match zero samples.
+    covariates.insert(0, "FID", covariates["IID"])
     covariates = covariates[["FID", "IID"] + [col for col in covariates.columns if col not in {"FID", "IID"}]]
 
     if args.include_covariates.strip():
