@@ -29,12 +29,14 @@ strata:
   all:
     column: ""
     values: []
-  # "Ever" is both smoking levels, which is exactly what the frozen pipeline's
-  # "everything that is not NEVER" could not express without also sweeping in
-  # Unknown. Listing the levels explicitly is the whole point.
+  # SMOKE_CAT is derived in src/003_data-phenotype.R from smoke_statVV:
+  #   Never 8046 -> NEVER | Former 4911 + Smoker 4535 -> EVER | Unknown 102 -> excluded
+  # The 102 Unknown are in NEITHER arm. The frozen pipeline's control arm was
+  # the complement of the case value, which would have analysed them as
+  # never-smokers.
   ever:
     column: "SMOKE_CAT"
-    values: ["FORMER", "CURRENT"]
+    values: ["EVER"]
   never:
     column: "SMOKE_CAT"
     values: ["NEVER"]
@@ -88,7 +90,9 @@ regenie_bsize_step1:  1000
 regenie_bsize_step2:  400
 
 # --- METAL ---
-metal_binary:      "tools/metal/metal"   # resolved relative to pipeline/ unless given as an absolute path
+# Deliberately NOT set here. -params-file overrides nextflow.config, so setting
+# it would shadow the GWAS_METAL_BIN lookup that lets this tree reuse the METAL
+# binary already built in the frozen tree. Set GWAS_METAL_BIN in .env instead.
 
 # --- LDSC (intercept + SNP-h2 on each cross-study meta) ---
 # Data installed by:  bash src/004_ldsc-herit.sh --reference   (shared, under data/reference/).

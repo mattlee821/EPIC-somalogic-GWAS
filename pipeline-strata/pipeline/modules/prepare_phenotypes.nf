@@ -1,6 +1,6 @@
 process PREPARE_PHENOTYPES {
   label        'low'
-  conda        "${projectDir}/../env/py_prep"
+  conda        "${params.env_dir}/py_prep"
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/002_prepare-phenotypes" }, mode: 'copy'
 
   input:

@@ -43,6 +43,27 @@
 
 set -euo pipefail
 
+# --- upstream re-run guard (pipeline-strata) --------------------------------
+# This script produces the per-study PLINK2 filesets under $GWAS_GENETICS_DIR,
+# which are SHARED with the frozen publication tree and have already been built
+# by running it from the repository root.
+#
+# DESTRUCTIVE: those filesets are an INPUT to the frozen publication analysis.
+#   Re-running would overwrite them in place.
+#
+# The stratified analysis starts at src/003_data-phenotype.R. If you genuinely
+# need to re-run this, do it from the root tree, or set:
+#     GWAS_ALLOW_UPSTREAM_RERUN=1
+if [[ "${GWAS_ALLOW_UPSTREAM_RERUN:-0}" != "1" ]]; then
+  echo "REFUSING to run 002_data-genetics.sh from pipeline-strata/." >&2
+  echo "Its outputs are shared with the frozen publication tree and already exist." >&2
+  echo "Start this analysis at src/003_data-phenotype.R." >&2
+  echo "Override with GWAS_ALLOW_UPSTREAM_RERUN=1 if you are certain." >&2
+  exit 1
+fi
+# ---------------------------------------------------------------------------
+
+
 # --- environment -------------------------------------------------------------
 # Under SLURM the job runs from the slurmd spool dir, so look in SLURM_SUBMIT_DIR
 # (where sbatch was launched) before the PWD/script-relative locations.

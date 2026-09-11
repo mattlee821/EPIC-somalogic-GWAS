@@ -1,6 +1,6 @@
 process COHORT_SUMMARY {
   label        'low'
-  conda        "${projectDir}/../env/py_validate"
+  conda        "${params.env_dir}/py_validate"
   publishDir   "${params.outdir}", mode: 'copy'
 
   input:

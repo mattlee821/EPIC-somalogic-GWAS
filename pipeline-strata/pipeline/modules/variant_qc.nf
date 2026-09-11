@@ -1,6 +1,6 @@
 process VARIANT_QC {
   label        'medium'
-  conda        "${projectDir}/../env/plink2"
+  conda        "${params.env_dir}/plink2"
 
   input:
   tuple val(study_id), val(pfile_prefix), val(maf), val(info_min)

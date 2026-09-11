@@ -1,6 +1,6 @@
 process PREPARE_COVARIATES {
   label        'low'
-  conda        "${projectDir}/../env/py_prep"
+  conda        "${params.env_dir}/py_prep"
 
   input:
   tuple val(study_id), val(group), path(covariate_file), path(sample_file), val(group_column), val(group_values), val(include_covariates), val(include_proteins)

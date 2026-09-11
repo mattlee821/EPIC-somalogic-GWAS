@@ -1,6 +1,6 @@
 process META_STUDY {
   label        'medium'
-  conda        "${projectDir}/../env/py_qc"
+  conda        "${params.env_dir}/py_qc"
   publishDir   params.outdir, mode: 'copy', overwrite: true, saveAs: { name ->
     // The stratum MUST be in the path. Several strata are meta-analysed in one
     // run, and with overwrite:true a group-less path makes them silently

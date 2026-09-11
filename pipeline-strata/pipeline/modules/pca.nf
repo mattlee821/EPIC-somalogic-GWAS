@@ -1,6 +1,6 @@
 process PCA {
   label        'medium'
-  conda        "${projectDir}/../env/plink2"
+  conda        "${params.env_dir}/plink2"
 
   input:
   tuple val(study_id), val(group), path(step1_pgen), path(step1_pvar), path(step1_psam)

@@ -1,6 +1,6 @@
 process LD_PRUNING {
   label        'medium'
-  conda        "${projectDir}/../env/plink2"
+  conda        "${params.env_dir}/plink2"
   publishDir   { "${params.outdir}/${study_id}/_shared/${group}/006_ld-pruning" }, mode: 'copy'
 
   input:

@@ -1,6 +1,6 @@
 process LDSC {
   label        'low'
-  conda        "${projectDir}/../env/ldsc"
+  conda        "${params.env_dir}/ldsc"
   publishDir   params.outdir, mode: 'copy', overwrite: true, saveAs: { name ->
     // Per-protein metrics + logs alongside the meta outputs.
     "meta/${protein_id}/${group}/014_metrics/${file(name).name}"

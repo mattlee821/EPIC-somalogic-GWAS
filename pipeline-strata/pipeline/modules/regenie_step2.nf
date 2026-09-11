@@ -1,6 +1,6 @@
 process REGENIE_STEP2 {
   label        'regenie_step2'
-  conda        "${projectDir}/../env/regenie"
+  conda        "${params.env_dir}/regenie"
   publishDir   params.outdir, mode: params.publish_mode ?: 'link', saveAs: { name ->
     // Single all-chromosome output per protein (full_<protein>.regenie.gz).
     "${study_id}/${protein_id}/${group}/008_regenie-step2/${file(name).name}"

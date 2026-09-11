@@ -55,15 +55,30 @@ get_env <- function(key, default = NULL) {
 
 
 # strata definition ====
-# THE ONLY PLACE raw EPIC variables are mapped onto analysis strata.
+# ---------------------------------------------------------------------------
+# THIS IS THE STAGE AT WHICH ANALYSIS VARIABLES ARE DEFINED.
 #
-# >> VERIFY THE LEVEL CODINGS BELOW AGAINST THE EPIC DATA DICTIONARY BEFORE
-# >> THE FIRST REAL RUN. The source column is matched by trying each candidate
-# >> name in turn; the recode maps raw values onto the labels that
-# >> pipeline/params.yaml refers to. Anything a recode returns NA for is in NO
-# >> stratum -- deliberately, so an "Unknown" smoker is never silently pooled
-# >> with never-smokers. The script prints a raw-to-mapped crosstab and fails
-# >> if a source column is absent or if nothing maps.
+# Each entry derives ONE new column in the phenofile from the raw EPIC sample
+# metadata (data_soma$others). pipeline/params.yaml then refers to that column
+# by name and picks which of its levels form each stratum.
+#
+# To add a variable for a new stratification:
+#   1. Add an entry here: the output column name, the raw source column, and a
+#      recode() mapping raw values onto the labels you want.
+#   2. Add matching strata to pipeline/params.yaml, e.g.
+#        alcohol_hi: { column: "ALC_CAT", values: ["HIGH"] }
+#   3. Re-run this script; it rewrites the samplesheet with the strata each
+#      study is large enough to run.
+#
+# Rules that make this safe:
+#   * recode() returning NA means "in no stratum". That is how exclusions are
+#     expressed -- there is no catch-all group to fall into.
+#   * optional = TRUE lets a variable be declared before its source column is
+#     confirmed: if the column is absent the variable is skipped with a
+#     warning instead of aborting the run.
+#   * A raw-to-mapped crosstab is printed for every variable, and the script
+#     stops if a required variable maps nothing.
+# ---------------------------------------------------------------------------
 as_plain <- function(x) {
   x <- unclass(x)
   attributes(x) <- NULL
@@ -71,27 +86,40 @@ as_plain <- function(x) {
 }
 
 strata_spec <- list(
+
+  # Smoking. Verified against the data:
+  #   table(data_soma$others$smoke_statVV)
+  #     Never 8046 | Former 4911 | Smoker 4535 | Unknown 102
+  # Ever = Former + Smoker. Unknown (102) maps to NA and is therefore in
+  # NEITHER arm -- it is not "not-never". Expressing that was impossible in the
+  # frozen pipeline, whose control arm was the complement of the case value.
   SMOKE_CAT = list(
-    source = c("Smoke_Stat", "SMOKE_STAT", "Smoke_Status", "Smoking_Status", "smoke_stat"),
-    recode = function(x) {
+    source   = c("smoke_statVV", "Smoke_Stat", "smoke_stat"),
+    optional = FALSE,
+    recode   = function(x) {
       v <- tolower(as_plain(x))
       dplyr::case_when(
-        v %in% c("1", "never", "never smoker")                  ~ "NEVER",
-        v %in% c("2", "former", "ex", "ex-smoker", "ex smoker")  ~ "FORMER",
-        v %in% c("3", "current", "smoker", "current smoker")     ~ "CURRENT",
-        TRUE                                                     ~ NA_character_
+        v == "never"                  ~ "NEVER",
+        v %in% c("former", "smoker")  ~ "EVER",
+        TRUE                          ~ NA_character_
       )
     }
   ),
+
+  # BMI. Optional: the source column name is not yet confirmed against the
+  # metadata, so this is skipped with a warning until one of the candidates
+  # matches. Add the real name to `source` to switch it on -- no other change
+  # is needed, the bmi_lo/bmi_hi strata are already declared in params.yaml.
   BMI_CAT = list(
-    source = c("Bmi_C", "BMI", "bmi", "Bmi_Adj", "Bmi"),
-    recode = function(x) {
+    source   = c("bmi_cVV", "bmiVV", "Bmi_C", "BMI", "bmi"),
+    optional = TRUE,
+    recode   = function(x) {
       v <- suppressWarnings(as.numeric(as_plain(x)))
       dplyr::case_when(
-        is.na(v)            ~ NA_character_,
-        v <= 0 | v > 100    ~ NA_character_,   # implausible, treat as missing
-        v <  30             ~ "LO",
-        TRUE                ~ "HI"
+        is.na(v)         ~ NA_character_,
+        v <= 10 | v > 80 ~ NA_character_,   # implausible, treat as missing
+        v <  30          ~ "LO",
+        TRUE             ~ "HI"
       )
     }
   )
@@ -238,6 +266,93 @@ data_genetic <- Sys.glob(file.path(genetics_path, "*", "*.psam")) |>
   dplyr::filter(!is.na(bio)) |>            # keep genotyped samples with proteomics
   dplyr::left_join(bio_lookup, by = "bio") |>   # adds IID_clean (Idepic) for joins
   dplyr::distinct(IID_geno, STUDY, .keep_all = TRUE)
+
+# comprehensive sample completeness assessment (pre-dedup) ====
+# Every sample entering the GWAS must have complete data for ALL covariates the
+# association model conditions on. REGENIE removes any sample with a missing
+# covariate value from every test, silently lowering the effective N (observed:
+# 9,203 -> 9,174 from missing PHENO alone). We therefore assess all GWAS
+# covariates up front -- before any dedup or study-retention counting -- and
+# remove incomplete samples so they never influence study assignment or sizes,
+# and every downstream N is consistent and explicit (keep_samples.txt, PCA,
+# covariates, REGENIE).
+#
+# GWAS covariates assessed:
+#   - PHENO    : case/control disease status (.psam; combined-analysis
+#                adjustment), only where the study .psam carries a PHENO column.
+#   - Sex, Age_Recr : from the SomaLogic sample metadata.
+# Proteins are OUTCOMES (per-trait missingness is handled by REGENIE, so a sample
+# missing one protein still contributes to the others) and PlateId is excluded
+# from the covariate set, so neither triggers sample removal. PCs are computed
+# downstream on the retained set and are always complete.
+
+# Join the metadata covariates needed for the check (reused for the phenofile).
+# Resolve each variable's source column against the SomaLogic sample metadata.
+# A required variable that cannot be resolved stops the run and prints the
+# available column names; an optional one is skipped with a warning.
+strata_source <- vapply(names(strata_spec), function(nm) {
+  candidates <- strata_spec[[nm]]$source
+  hit <- candidates[candidates %in% names(meta_sample)]
+  if (length(hit) > 0) return(hit[[1]])
+
+  msg <- paste0("Variable '", nm, "': none of the candidate source columns (",
+                paste(candidates, collapse = ", "), ") exist in the SomaLogic ",
+                "sample metadata.")
+  if (isTRUE(strata_spec[[nm]]$optional)) {
+    warning(msg, " Declared optional, so it is SKIPPED. Any stratum in ",
+            "params.yaml using it will be empty and will not run.",
+            call. = FALSE, immediate. = TRUE)
+    return(NA_character_)
+  }
+  stop(msg, "\nAvailable columns:\n  ",
+       paste(sort(names(meta_sample)), collapse = "\n  "),
+       "\nAdd the correct name to strata_spec$", nm, "$source near the top of this script.")
+}, character(1))
+
+strata_active <- names(strata_source)[!is.na(strata_source)]
+message("Strata variables active: ",
+        paste(sprintf("%s <- %s", strata_active, strata_source[strata_active]), collapse = ", "))
+if (length(strata_active) < length(strata_source)) {
+  message("Strata variables skipped: ",
+          paste(setdiff(names(strata_source), strata_active), collapse = ", "))
+}
+
+data_genetic <- data_genetic |>
+  dplyr::left_join(
+    meta_sample |>
+      dplyr::distinct(IID_clean, .keep_all = TRUE) |>
+      dplyr::select(IID_clean, Sex, Age_Recr, PlateId,
+                    dplyr::all_of(unname(strata_source[strata_active]))),
+    by = "IID_clean"
+  )
+
+# Derive the analysis variables. These are deliberately NOT part of the
+# completeness check below: a sample with unknown smoking status is excluded
+# from the ever/never strata but still contributes to the unstratified
+# analysis, so dropping it outright would shrink every stratum for no reason.
+for (nm in strata_active) {
+  raw    <- data_genetic[[strata_source[[nm]]]]
+  mapped <- strata_spec[[nm]]$recode(raw)
+  data_genetic[[nm]] <- mapped
+
+  message("\n", nm, " (from ", strata_source[[nm]], ") raw -> mapped:")
+  print(table(raw    = as_plain(raw),
+              mapped = ifelse(is.na(mapped), "<excluded>", mapped),
+              useNA  = "ifany"))
+
+  n_unmapped <- sum(is.na(mapped))
+  pct <- 100 * n_unmapped / length(mapped)
+  message(sprintf("  %d/%d (%.1f%%) excluded from every %s stratum.",
+                  n_unmapped, length(mapped), pct, nm))
+  if (all(is.na(mapped))) {
+    stop("Variable '", nm, "' mapped NOTHING. The recode in strata_spec does not ",
+         "match how '", strata_source[[nm]], "' is coded -- see the crosstab above.")
+  }
+  if (pct > 20) {
+    warning(sprintf("%s: %.1f%% excluded. Check the recode against the data dictionary.",
+                    nm, pct), call. = FALSE, immediate. = TRUE)
+  }
+}
 
 # comprehensive sample completeness assessment (pre-dedup) ====
 # Every sample entering the GWAS must have complete data for ALL covariates the
@@ -509,9 +624,9 @@ message("\nStrata from ", params_file, ": ",
 count_stratum <- function(study_rows, def) {
   if (!nzchar(def$column)) return(nrow(study_rows))
   if (!def$column %in% names(study_rows)) {
-    stop("Stratum column '", def$column, "' referenced in ", params_file,
-         " is not present in the phenofile. Columns derived here: ",
-         paste(names(strata_spec), collapse = ", "))
+    # The variable was declared optional and skipped. Count 0 so the stratum
+    # simply never runs, rather than aborting a run whose other strata are fine.
+    return(0L)
   }
   sum(study_rows[[def$column]] %in% def$values, na.rm = TRUE)
 }

@@ -1,6 +1,6 @@
 process HERITABILITY {
   label        'low'
-  conda        "${projectDir}/../env/herit"
+  conda        "${params.env_dir}/herit"
   publishDir   params.outdir, mode: 'copy', overwrite: true, saveAs: { name ->
     "meta/${protein_id}/${group}/014_metrics/${file(name).name}"
   }
