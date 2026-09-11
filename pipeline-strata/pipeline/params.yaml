@@ -59,11 +59,19 @@ strata:
 # association signal, and it would make the strata non-comparable.
 pca_group:         "all"
 
+# Does the PCA reference stratum also get its own GWAS?
+# false: 'all' is used ONLY to compute the shared ancestry PCs. It still runs
+# phenotype/covariate prep, variant QC and LD pruning (cheap), but no REGENIE,
+# no meta-analysis and no LDSC -- so the run costs 2 strata, not 3. Set true if
+# you later want the unstratified result as a reference for interpreting
+# stratum differences.
+pca_group_gwas:    false
+
 # Per-study groups are normally taken from the samplesheet 'analysis_groups'
 # column (written by 003 from per-stratum counts). This list is only the
 # fallback for samplesheets without that column. Every name must key into
 # 'strata' above.
-analysis_groups:   ["all", "ever", "never"]
+analysis_groups:   ["all", "ever", "never"]   # 'all' is the PCA reference (see pca_group_gwas)
 
 # Minimum samples in a stratum for that study before it is analysed at all.
 min_stratum_n:     100
@@ -83,7 +91,7 @@ info_score:        0.3
 meta_group:       ""
 # Cross-study meta, run independently within each named stratum so each one
 # gets its own pooled sumstats. Comma-separated list of strata names.
-meta_study:       "all,ever,never"
+meta_study:       "ever,never"
 king_cutoff:       0.0884      # 2nd-degree relatedness
 
 # --- LD pruning ---

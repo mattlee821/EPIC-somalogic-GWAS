@@ -339,7 +339,41 @@ data_genetic <- psam_files |>
       stringsAsFactors = FALSE
     )
   }) |>
-  dplyr::mutate(bio = extract_bio(IID_geno, bio_set)) |>
+  dplyr::mutate(bio = extract_bio(IID_geno, bio_set))
+
+# Per-study proteomics match report. A study whose genotype IIDs match no
+# Idepic_Bio is dropped entirely by the filter below, which previously showed up
+# only as a missing study much later. Report it here, with example IIDs, so the
+# cause is visible: an empty .psam, an unexpected IID format, or a study that
+# genuinely has no proteomics.
+match_report <- data_genetic |>
+  dplyr::group_by(STUDY) |>
+  dplyr::summarise(n_read = dplyr::n(),
+                   n_matched = sum(!is.na(bio)),
+                   .groups = "drop") |>
+  dplyr::mutate(pct = ifelse(n_read > 0, 100 * n_matched / n_read, NA_real_)) |>
+  dplyr::arrange(pct)
+
+message("\nProteomics match per study (genotype IID -> Idepic_Bio):")
+for (i in seq_len(nrow(match_report))) {
+  message(sprintf("  %-16s %6d read, %6d matched (%5.1f%%)",
+                  match_report$STUDY[i], match_report$n_read[i],
+                  match_report$n_matched[i], match_report$pct[i]))
+}
+
+unmatched_studies <- match_report$STUDY[match_report$n_matched == 0]
+for (st in unmatched_studies) {
+  examples <- utils::head(data_genetic$IID_geno[data_genetic$STUDY == st], 5)
+  warning("Study '", st, "' matched NO proteomics samples and is excluded. ",
+          "Read ", match_report$n_read[match_report$STUDY == st], " genotype IIDs; ",
+          if (length(examples)) paste0("examples: ", paste(examples, collapse = ", "))
+          else "the .psam is EMPTY",
+          ". Compare these against Idepic_Bio in the soma metadata -- a format ",
+          "mismatch here silently removes the whole study.",
+          call. = FALSE, immediate. = TRUE)
+}
+
+data_genetic <- data_genetic |>
   dplyr::filter(!is.na(bio)) |>            # keep genotyped samples with proteomics
   dplyr::left_join(bio_lookup, by = "bio") |>   # adds IID_clean (Idepic) for joins
   dplyr::distinct(IID_geno, STUDY, .keep_all = TRUE)

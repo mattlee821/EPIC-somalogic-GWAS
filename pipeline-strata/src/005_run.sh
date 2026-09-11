@@ -75,7 +75,7 @@ COVAR_FILE=""
 # has to be requested explicitly.
 COVARIATES="Sex,Age_Recr,PHENO"
 META_GROUP=""
-META_STUDY="all,ever,never"
+META_STUDY="ever,never"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

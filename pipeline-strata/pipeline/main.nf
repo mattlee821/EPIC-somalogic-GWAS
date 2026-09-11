@@ -88,6 +88,18 @@ workflow {
         }
         .unique()
 
+    def pca_group_gwas_cfg = (params.pca_group_gwas == null) ? true :
+        !(params.pca_group_gwas.toString().trim().toLowerCase() in ['false', '0', 'no'])
+    if (!pca_group_gwas_cfg) {
+        def analysed = strata_def.keySet().findAll { it != pca_group }
+        if (!analysed) {
+            throw new IllegalArgumentException(
+                "params.pca_group_gwas is false, so the reference stratum '${pca_group}' is used " +
+                "for ancestry PCs only -- but no other stratum is defined, leaving nothing to analyse."
+            )
+        }
+    }
+
     def unknown_groups = samplesheet_groups.findAll { !strata_def.containsKey(it) }
     if (unknown_groups) {
         throw new IllegalArgumentException(
@@ -249,7 +261,20 @@ workflow {
     def regenie_key = { sid, grp -> "${sid}__${grp}" }
     def regenie_full = PREPARE_PHENOTYPES.out[0].map { sid, grp, feature_files, full, manifest, keep -> tuple(regenie_key(sid, grp), full) }
     def regenie_cov = ADD_PCS.out[0].map { sid, grp, cov -> tuple(regenie_key(sid, grp), cov) }
-    def regenie_ld = LD_PRUNING.out.map { sid, grp, pgen, pvar, psam -> tuple(regenie_key(sid, grp), sid, grp, pgen, pvar, psam) }
+    // The PCA reference stratum is REQUIRED even when no GWAS is wanted for it.
+    // Ancestry PCs must come from one common, unfiltered set: computing them
+    // separately within each stratum would let them absorb stratum-specific
+    // signal and would make effect sizes non-comparable across strata -- which
+    // is precisely the comparison this pipeline exists to make. So the
+    // reference group is carried as far as LD_PRUNING and PCA, then dropped
+    // here when params.pca_group_gwas is false, so it costs no REGENIE fan-out.
+    def pca_group_gwas = (params.pca_group_gwas == null) ? true :
+        !(params.pca_group_gwas.toString().trim().toLowerCase() in ['false', '0', 'no'])
+
+    def gwas_ld = pca_group_gwas ? LD_PRUNING.out :
+        LD_PRUNING.out.filter { sid, grp, pgen, pvar, psam -> grp != pca_group }
+
+    def regenie_ld = gwas_ld.map { sid, grp, pgen, pvar, psam -> tuple(regenie_key(sid, grp), sid, grp, pgen, pvar, psam) }
 
     def regenie_shared = regenie_ld
         .join(regenie_full, by: 0)
