@@ -158,14 +158,11 @@ strata_spec <- list(
     }
   ),
 
-  # BMI. Optional. The 2026-09-11 run resolved this to `Bmi_C`, but that
-  # column's contents are not yet confirmed: the `_C` suffix suggests it may be
-  # a CATEGORISED BMI rather than a continuous value. The recode below assumes
-  # continuous and thresholds at 30. If Bmi_C turns out to be categorical, the
-  # recode maps nothing, the variable is SKIPPED with a warning (it is
-  # optional, so it will not block the smoking strata), and the run log prints
-  # its value labels -- at which point replace the recode below with a mapping
-  # from those labels onto "LO"/"HI". Do not guess the boundaries.
+  # BMI. Verified against the data: Bmi_C is CONTINUOUS despite the `_C`
+  # suffix -- 1,846 distinct values spanning 15.63 to 67.86, and the threshold
+  # below classified all 10,191 samples with none excluded. Kept optional so an
+  # unexpected coding would skip it rather than block the smoking strata.
+  # WHO cut-off: obese is BMI >= 30, so 30.0 itself belongs to HI.
   BMI_CAT = list(
     source   = c("bmi_cVV", "bmiVV", "Bmi_C", "BMI", "bmi"),
     optional = TRUE,
@@ -347,26 +344,12 @@ data_genetic <- psam_files |>
   dplyr::left_join(bio_lookup, by = "bio") |>   # adds IID_clean (Idepic) for joins
   dplyr::distinct(IID_geno, STUDY, .keep_all = TRUE)
 
-# comprehensive sample completeness assessment (pre-dedup) ====
-# Every sample entering the GWAS must have complete data for ALL covariates the
-# association model conditions on. REGENIE removes any sample with a missing
-# covariate value from every test, silently lowering the effective N (observed:
-# 9,203 -> 9,174 from missing PHENO alone). We therefore assess all GWAS
-# covariates up front -- before any dedup or study-retention counting -- and
-# remove incomplete samples so they never influence study assignment or sizes,
-# and every downstream N is consistent and explicit (keep_samples.txt, PCA,
-# covariates, REGENIE).
-#
-# GWAS covariates assessed:
-#   - PHENO    : case/control disease status (.psam; combined-analysis
-#                adjustment), only where the study .psam carries a PHENO column.
-#   - Sex, Age_Recr : from the SomaLogic sample metadata.
-# Proteins are OUTCOMES (per-trait missingness is handled by REGENIE, so a sample
-# missing one protein still contributes to the others) and PlateId is excluded
-# from the covariate set, so neither triggers sample removal. PCs are computed
-# downstream on the retained set and are always complete.
+# strata variables ====
+# Join the metadata columns the GWAS needs -- the model covariates (Sex,
+# Age_Recr, PlateId) and each strata variable's source column -- then derive the
+# strata variables themselves. The completeness check that uses the covariates
+# follows further down.
 
-# Join the metadata covariates needed for the check (reused for the phenofile).
 # Resolve each variable's source column against the SomaLogic sample metadata.
 # A required variable that cannot be resolved stops the run and prints the
 # available column names; an optional one is skipped with a warning.
@@ -498,62 +481,6 @@ if (length(skipped)) {
 # missing one protein still contributes to the others) and PlateId is excluded
 # from the covariate set, so neither triggers sample removal. PCs are computed
 # downstream on the retained set and are always complete.
-
-# Join the metadata covariates needed for the check (reused for the phenofile).
-# Resolve each stratum's source column against the SomaLogic sample metadata,
-# failing with the available names rather than quietly producing empty strata.
-strata_source <- vapply(names(strata_spec), function(nm) {
-  candidates <- strata_spec[[nm]]$source
-  hit <- candidates[candidates %in% names(meta_sample)]
-  if (length(hit) == 0) {
-    stop("Stratum column '", nm, "': none of the candidate source columns (",
-         paste(candidates, collapse = ", "), ") exist in the SomaLogic sample ",
-         "metadata.\nAvailable columns:\n  ",
-         paste(sort(names(meta_sample)), collapse = "\n  "),
-         "\nAdd the correct name to strata_spec$", nm, "$source near the top of this script.")
-  }
-  hit[[1]]
-}, character(1))
-
-message("Strata source columns resolved: ",
-        paste(sprintf("%s <- %s", names(strata_source), strata_source), collapse = ", "))
-
-data_genetic <- data_genetic |>
-  dplyr::left_join(
-    meta_sample |>
-      dplyr::distinct(IID_clean, .keep_all = TRUE) |>
-      dplyr::select(IID_clean, Sex, Age_Recr, PlateId,
-                    dplyr::all_of(unname(strata_source))),
-    by = "IID_clean"
-  )
-
-# Derive the analysis strata columns. These are deliberately NOT part of the
-# completeness check below: a sample with unknown smoking status is excluded
-# from the ever/never strata but still contributes to the unstratified
-# analysis, so dropping it outright would shrink every stratum for no reason.
-for (nm in names(strata_spec)) {
-  raw <- data_genetic[[strata_source[[nm]]]]
-  mapped <- strata_spec[[nm]]$recode(raw)
-  data_genetic[[nm]] <- mapped
-
-  crosstab <- table(raw = as_plain(raw), mapped = ifelse(is.na(mapped), "<unmapped>", mapped),
-                    useNA = "ifany")
-  message("\n", nm, " (from ", strata_source[[nm]], ") raw -> mapped:")
-  print(crosstab)
-
-  n_unmapped <- sum(is.na(mapped))
-  pct <- 100 * n_unmapped / length(mapped)
-  message(sprintf("  %d/%d (%.1f%%) unmapped -> excluded from every %s stratum.",
-                  n_unmapped, length(mapped), pct, nm))
-  if (all(is.na(mapped))) {
-    stop("Stratum column '", nm, "' mapped NOTHING. The recode in strata_spec does not ",
-         "match how '", strata_source[[nm]], "' is coded -- see the crosstab above.")
-  }
-  if (pct > 20) {
-    warning(sprintf("%s: %.1f%% of samples unmapped. Check the recode against the data dictionary.",
-                    nm, pct))
-  }
-}
 
 # Robust to haven_labelled (SPSS) columns from the soma RDS, whose as.character
 # method errors: strip the class to the underlying atomic vector first.
