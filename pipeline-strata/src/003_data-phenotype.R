@@ -79,10 +79,40 @@ get_env <- function(key, default = NULL) {
 #   * A raw-to-mapped crosstab is printed for every variable, and the script
 #     stops if a required variable maps nothing.
 # ---------------------------------------------------------------------------
+# Flatten a metadata column to plain character, RESOLVING SPSS VALUE LABELS.
+#
+# The soma RDS comes from SPSS, so columns like smoke_statVV are haven_labelled:
+# the storage is integer codes and the labels live in attr(x, "labels"). This
+# matters because table(df$smoke_statVV) in an interactive session prints the
+# LABELS ("Never", "Former", ...) while the underlying vector holds 1, 2, 3 --
+# so a recode written against what you saw on screen silently matches nothing.
+# Simply unclassing (as the completeness check does, to dodge haven's erroring
+# as.character method) throws the labels away and leaves the bare codes.
+#
+# Here we translate codes back to their labels when a label dictionary exists,
+# and fall back to the code as a string when it does not. Recodes in
+# strata_spec can therefore be written against the human-readable levels.
 as_plain <- function(x) {
-  x <- unclass(x)
-  attributes(x) <- NULL
-  trimws(as.character(x))
+  labels <- attr(x, "labels", exact = TRUE)
+
+  raw <- unclass(x)
+  attributes(raw) <- NULL
+  out <- trimws(as.character(raw))
+
+  if (!is.null(labels) && length(labels) > 0 && !is.null(names(labels))) {
+    lookup <- stats::setNames(trimws(names(labels)),
+                              trimws(as.character(unname(labels))))
+    hit <- unname(lookup[out])
+    out <- ifelse(is.na(hit), out, hit)
+  }
+  out
+}
+
+# Human-readable description of a column's value labels, for the run log.
+describe_labels <- function(x) {
+  labels <- attr(x, "labels", exact = TRUE)
+  if (is.null(labels) || length(labels) == 0) return("(no SPSS value labels; using raw values)")
+  paste(sprintf("%s=%s", unname(labels), names(labels)), collapse = ", ")
 }
 
 strata_spec <- list(
@@ -106,10 +136,14 @@ strata_spec <- list(
     }
   ),
 
-  # BMI. Optional: the source column name is not yet confirmed against the
-  # metadata, so this is skipped with a warning until one of the candidates
-  # matches. Add the real name to `source` to switch it on -- no other change
-  # is needed, the bmi_lo/bmi_hi strata are already declared in params.yaml.
+  # BMI. Optional. The 2026-09-11 run resolved this to `Bmi_C`, but that
+  # column's contents are not yet confirmed: the `_C` suffix suggests it may be
+  # a CATEGORISED BMI rather than a continuous value. The recode below assumes
+  # continuous and thresholds at 30. If Bmi_C turns out to be categorical, the
+  # recode maps nothing, the variable is SKIPPED with a warning (it is
+  # optional, so it will not block the smoking strata), and the run log prints
+  # its value labels -- at which point replace the recode below with a mapping
+  # from those labels onto "LO"/"HI". Do not guess the boundaries.
   BMI_CAT = list(
     source   = c("bmi_cVV", "bmiVV", "Bmi_C", "BMI", "bmi"),
     optional = TRUE,
@@ -310,6 +344,15 @@ strata_source <- vapply(names(strata_spec), function(nm) {
 }, character(1))
 
 strata_active <- names(strata_source)[!is.na(strata_source)]
+message("\nGenotyped samples read from .psam files: ", nrow(data_genetic),
+        " across ", dplyr::n_distinct(data_genetic$STUDY), " study file(s) under ", genetics_path)
+if (nrow(data_genetic) < 500) {
+  warning("Only ", nrow(data_genetic), " genotyped samples were found under ", genetics_path,
+          ". The full EPIC analysis set is ~9,000. Check GWAS_GENETICS_DIR points at the ",
+          "complete per-study PLINK2 filesets and that scratch has not been purged.",
+          call. = FALSE, immediate. = TRUE)
+}
+
 message("Strata variables active: ",
         paste(sprintf("%s <- %s", strata_active, strata_source[strata_active]), collapse = ", "))
 if (length(strata_active) < length(strata_source)) {
@@ -330,12 +373,14 @@ data_genetic <- data_genetic |>
 # completeness check below: a sample with unknown smoking status is excluded
 # from the ever/never strata but still contributes to the unstratified
 # analysis, so dropping it outright would shrink every stratum for no reason.
+strata_derived <- character(0)
 for (nm in strata_active) {
   raw    <- data_genetic[[strata_source[[nm]]]]
   mapped <- strata_spec[[nm]]$recode(raw)
-  data_genetic[[nm]] <- mapped
 
-  message("\n", nm, " (from ", strata_source[[nm]], ") raw -> mapped:")
+  message("\n", nm, " (from ", strata_source[[nm]], ")")
+  message("  value labels: ", describe_labels(raw))
+  message("  raw -> mapped:")
   print(table(raw    = as_plain(raw),
               mapped = ifelse(is.na(mapped), "<excluded>", mapped),
               useNA  = "ifany"))
@@ -345,13 +390,36 @@ for (nm in strata_active) {
   message(sprintf("  %d/%d (%.1f%%) excluded from every %s stratum.",
                   n_unmapped, length(mapped), pct, nm))
   if (all(is.na(mapped))) {
-    stop("Variable '", nm, "' mapped NOTHING. The recode in strata_spec does not ",
-         "match how '", strata_source[[nm]], "' is coded -- see the crosstab above.")
+    msg <- paste0("Variable '", nm, "' mapped NOTHING. The recode in strata_spec ",
+                  "does not match how '", strata_source[[nm]], "' is coded -- see ",
+                  "the value labels and crosstab above.")
+    # A REQUIRED variable mapping nothing is fatal. An OPTIONAL one is skipped:
+    # an unexpected coding in a secondary variable must not block the strata
+    # that are working, so it is dropped and its strata simply never run.
+    if (isTRUE(strata_spec[[nm]]$optional)) {
+      warning(msg, " Declared optional, so it is SKIPPED.", call. = FALSE, immediate. = TRUE)
+      next
+    }
+    stop(msg)
   }
+
+  data_genetic[[nm]] <- mapped
+  strata_derived <- c(strata_derived, nm)
   if (pct > 20) {
     warning(sprintf("%s: %.1f%% excluded. Check the recode against the data dictionary.",
                     nm, pct), call. = FALSE, immediate. = TRUE)
   }
+}
+
+if (length(strata_derived) == 0) {
+  stop("No strata variables were derived. Nothing can be stratified.")
+}
+message("\nStrata variables written to the phenofile: ",
+        paste(strata_derived, collapse = ", "))
+skipped <- setdiff(names(strata_spec), strata_derived)
+if (length(skipped)) {
+  message("Skipped (their strata in params.yaml will count 0 and will not run): ",
+          paste(skipped, collapse = ", "))
 }
 
 # comprehensive sample completeness assessment (pre-dedup) ====
