@@ -40,12 +40,18 @@ strata:
   never:
     column: "SMOKE_CAT"
     values: ["NEVER"]
-  bmi_lo:
-    column: "BMI_CAT"
-    values: ["LO"]
-  bmi_hi:
-    column: "BMI_CAT"
-    values: ["HI"]
+  # BMI strata are DEFINED BUT OFF for this run. BMI_CAT is still derived and
+  # written to the phenofile by src/003_data-phenotype.R (verified: Bmi_C is
+  # continuous, 15.63-67.86, all 10,191 samples classified at the WHO cut-off
+  # of 30), so switching these on is just uncommenting the six lines below --
+  # 003 does NOT need re-running. Add bmi_lo,bmi_hi to meta_study as well if
+  # you want them meta-analysed across studies, and use a separate --out.
+  # bmi_lo:
+  #   column: "BMI_CAT"
+  #   values: ["LO"]
+  # bmi_hi:
+  #   column: "BMI_CAT"
+  #   values: ["HI"]
 
 # Which stratum ancestry PCs are computed on, then shared with every other
 # stratum. This MUST be an unfiltered group (column: ""). PCs are never computed
