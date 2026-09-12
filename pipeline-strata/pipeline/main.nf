@@ -236,7 +236,7 @@ workflow {
 
     def ch_study_pcs = PCA.out.map { sid, grp, pvec, pval -> tuple(sid, pvec, pval) }
 
-    def cov_with_pcs_in = PREPARE_COVARIATES.out
+    def cov_with_pcs_in = PREPARE_COVARIATES.out.cov
         .combine(ch_study_pcs, by: 0)                            // [sid, grp, cov, eigenvec, eigenval]
         .map { sid, grp, cov, pvec, pval -> tuple(sid, grp, cov, pvec, pval) }
 

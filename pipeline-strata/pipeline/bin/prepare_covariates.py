@@ -198,6 +198,25 @@ def main() -> None:
     covariates = covariates[["FID", "IID"] + [col for col in covariates.columns if col not in {"FID", "IID"}]]
     covariates.to_csv(outdir / "covariates.cov", sep="\t", index=False, na_rep="NA")
 
+    # Record the model actually fitted. A covariate can be dropped here for one
+    # study and kept for another -- PHENO is invariant in the all-case studies
+    # (Ecvd_01, Ecvd_02) and survives elsewhere -- which means a meta-analysis
+    # can silently pool studies fitted on different models. Writing the surviving
+    # covariates next to the results makes that auditable afterwards instead of
+    # being visible only in a Nextflow work directory.
+    final_covariates = [col for col in covariates.columns if col not in {"FID", "IID"}]
+    requested = [c.strip() for c in args.include_covariates.split(",") if c.strip()]
+    dropped = [c for c in requested if resolve_column_name(final_covariates, c) is None]
+    with (outdir / "covariates_used.txt").open("w") as handle:
+        handle.write(f"study\t{args.study_id}\n")
+        handle.write(f"group\t{args.group}\n")
+        handle.write(f"n_samples\t{len(covariates)}\n")
+        handle.write(f"requested\t{','.join(requested) if requested else '<auto>'}\n")
+        handle.write(f"fitted\t{','.join(final_covariates)}\n")
+        handle.write(f"dropped\t{','.join(dropped) if dropped else '<none>'}\n")
+    if dropped:
+        print(f">>> NOTE: requested covariate(s) dropped for {args.study_id}/{args.group}: {dropped}")
+
 
 if __name__ == "__main__":
     main()
