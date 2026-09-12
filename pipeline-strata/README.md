@@ -9,23 +9,10 @@ analysis is frozen at git tag **`paper-v1`** and nothing in this tree modifies
 it. If you need to reproduce the paper, check out that tag and use `pipeline/`
 and `src/` at the repository root — not this directory.
 
-**Smoking is verified and ready.** `smoke_statVV` → `SMOKE_CAT`:
-
-| raw | n | → | stratum |
-|---|---|---|---|
-| `Never` | 8,046 | → | `NEVER` |
-| `Former` | 4,911 | → | `EVER` |
-| `Smoker` | 4,535 | → | `EVER` |
-| `Unknown` | 102 | → | *excluded from both* |
-
-(Full-cohort counts; the genotyped analysis set is smaller after the
-proteomics intersect and cross-study dedup.)
-
-**BMI is declared but off.** Its source column name is not yet confirmed, so
-`BMI_CAT` is marked `optional` — 003 skips it with a warning and the
-`bmi_lo`/`bmi_hi` strata simply never run. Add the real column name to
-`strata_spec$BMI_CAT$source` in `src/003_data-phenotype.R` to switch it on;
-nothing else needs changing.
+> **Before the first real run:** verify the smoking and BMI level codings in
+> `src/003_data-phenotype.R` (`strata_spec`, near the top) against the EPIC data
+> dictionary. They are a starting point, not a verified mapping. The script
+> prints a raw-to-mapped crosstab and refuses to continue if nothing maps.
 
 ---
 
@@ -37,7 +24,7 @@ A stratum is a **named whitelist of accepted values in one column**, declared in
 ```yaml
 strata:
   all:    { column: "",          values: [] }              # everyone
-  ever:   { column: "SMOKE_CAT", values: ["EVER"] }
+  ever:   { column: "SMOKE_CAT", values: ["FORMER","CURRENT"] }
   never:  { column: "SMOKE_CAT", values: ["NEVER"] }
   bmi_lo: { column: "BMI_CAT",   values: ["LO"] }
   bmi_hi: { column: "BMI_CAT",   values: ["HI"] }
@@ -50,9 +37,9 @@ a complement group.
 
 This is the substantive difference from the frozen pipeline, which defined its
 control arm as `!= cases_value`. That is safe for a binary disease code and
-wrong for anything else. On the real smoking data, `!= Never` gives an ever arm
-of **9,548** against a true **9,446** — the 102 `Unknown` silently analysed as
-smokers.
+wrong for anything else. On a realistic 30-sample fixture (10 never, 8 former,
+7 current, 3 unknown, 2 blank) the negation put **18** samples in the ever arm
+against a true count of **15** — three unknowns silently analysed as smokers.
 The frozen code also cannot run this analysis at all: it resolves the grouping
 column *after* covariate subsetting has already dropped it, so a strata column
 living in the phenofile raises `Group column not found`.
@@ -104,38 +91,19 @@ guards enforce it at runtime:
 | `GWAS_PHENO_DIR` | **New.** Explicit, never derived. The frozen `003` derives its phenotype dir from `GWAS_GENETICS_DIR`; since both trees share that directory, deriving it here would overwrite the published phenofile. `003` aborts if it resolves to the frozen path. |
 | `GWAS_RESULTS_DIR`, `GWAS_WORK_DIR`, `GWAS_STAGING_DIR`, `GWAS_SAMPLESHEET` | `-strata` suffixed. `005_run.sh` aborts if `GWAS_WORK_DIR` is the frozen tree's. |
 
-Two variables are **new and required**, because the frozen modules resolved
-these relative to their own tree (`${projectDir}/../env`, `${projectDir}/tools`)
-— which here would point at `pipeline-strata/env` and `pipeline-strata/pipeline/tools`,
-neither of which exists, and every process would fail to start:
+`src/001_source.sh`, `002_data-genetics.sh` and `004_ldsc-herit.sh` are copied
+here for completeness but **should not be re-run** — run them once from the
+repository root. `002` in particular writes to the shared genetics directory.
 
-| Variable | Points at |
-|---|---|
-| `GWAS_ENV_DIR` | the frozen tree's `env/` (conda environments from `001`) |
-| `GWAS_METAL_BIN` | the frozen tree's `pipeline/tools/metal/metal` |
-
-
-
-## Running — this analysis starts at 003
-
-Everything upstream of 003 already exists and is reused: the per-study PLINK2
-filesets, the conda environments, the METAL binary, and the LDSC reference data.
-`001_source.sh`, `002_data-genetics.sh` and `004_ldsc-herit.sh` are present for
-completeness but **refuse to run** from this tree (override with
-`GWAS_ALLOW_UPSTREAM_RERUN=1` only if you are certain). Re-running `002` in
-particular would overwrite genetics filesets that the frozen analysis reads.
+## Running
 
 ```bash
 cp .env.example .env          # then check every path
-sbatch  src/003_data-phenotype.sh    # derives SMOKE_CAT + writes the samplesheet
+Rscript src/003_data-phenotype.R     # strata columns + samplesheet
 sbatch  src/005_run.sh --out /WHERE/epic-gwas/strata-test \
                        --proteins "" --studies "Neuro_01,Brea_01_Erneg"
 bash    src/006_staging.sh --out <outdir> --transfer <dir>
 ```
-
-Read 003's log before launching 005: it prints the raw-to-mapped crosstab for
-every derived variable and the per-study stratum counts that decide which
-strata actually run.
 
 `003` decides which strata each study is large enough to run (`min_stratum_n`,
 read back out of `params.yaml` so the samplesheet can never disagree with the

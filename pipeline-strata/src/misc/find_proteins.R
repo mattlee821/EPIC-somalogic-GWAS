@@ -1,19 +1,3 @@
-#!/usr/bin/env Rscript
-# ---------------------------------------------------------------------------
-# find_proteins.R -- which SomaScan aptamers exist for a list of genes?
-#
-# Searches data$aux (the feature annotation) by gene symbol, then falls back to
-# a substring search of Target for anything not found, and finally confirms each
-# SeqId is actually a column in the phenofile -- which is what --proteins is
-# matched against. An aptamer present in aux but absent from the phenofile
-# cannot be analysed, so both checks matter.
-#
-# Usage:
-#   Rscript src/misc/find_proteins.R
-#   Rscript src/misc/find_proteins.R --genes "CHRNA5,BDNF,FTO"
-#   Rscript src/misc/find_proteins.R --out data/phenotype-strata/smoking-panel.txt
-# ---------------------------------------------------------------------------
-
 suppressMessages(library(dplyr))
 
 args <- commandArgs(trailingOnly = TRUE)

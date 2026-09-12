@@ -4,7 +4,6 @@
 .env
 .env.local
 .env.*
-!.env.example
 
 # Nextflow run state
 work/
