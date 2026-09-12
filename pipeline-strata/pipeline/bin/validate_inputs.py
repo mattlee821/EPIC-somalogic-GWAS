@@ -211,19 +211,62 @@ def main():
                         )
                         error_found = True
 
+        # Sample files, read once and reused by the covariate and strata checks.
+        sample_frames = {}
+        for s in selected_studies:
+            sample_file = s.get("sample_file", "")
+            if sample_file and os.path.exists(sample_file) and sample_file not in sample_frames:
+                try:
+                    sample_frames[sample_file] = read_sample_file(sample_file)
+                except Exception as exc:
+                    report(f"FAIL: Could not read sample file for {s['study_id']}: {exc}", is_error=True)
+                    error_found = True
+
         # 4. Covariate Header (Fallback to phenotype file if covariates.txt doesn't exist)
         cov_source = args.covariate_file if os.path.exists(args.covariate_file) else args.phenotype_file
-        
+
         if os.path.exists(cov_source):
             with open(cov_source, "r") as cf:
                 line = cf.readline().strip()
                 cov_header = line.split("\t") if "\t" in line else line.split(",")
-                
+
                 if args.covariates:
                     req_covs = [x.strip() for x in args.covariates.split(",")]
-                    missing_covs = [c for c in req_covs if resolve_column_name(cov_header, c) is None]
+
+                    # A covariate may live in the .psam rather than the phenotype
+                    # file -- PHENO exists ONLY in the .psam -- and
+                    # prepare_covariates.py resolves it there. Mirror that here,
+                    # or requesting PHENO always fails validation. Report it
+                    # PER STUDY: a covariate present in some studies' .psam and
+                    # absent from others means the meta-analysis would pool
+                    # different models, which is worth failing on.
+                    missing_covs = []
+                    for c in req_covs:
+                        if resolve_column_name(cov_header, c) is not None:
+                            continue
+                        studies_with = [os.path.basename(f) for f, frame in sample_frames.items()
+                                        if resolve_column_name(frame.columns, c) is not None]
+                        if not studies_with:
+                            missing_covs.append(c)
+                        elif len(studies_with) < len(sample_frames):
+                            absent = [os.path.basename(f) for f in sample_frames
+                                      if os.path.basename(f) not in studies_with]
+                            report(
+                                f"FAIL: Covariate '{c}' is in the sample file of "
+                                f"{len(studies_with)}/{len(sample_frames)} studies. Missing from: "
+                                f"{', '.join(sorted(absent)[:10])}. Those studies would be fitted "
+                                f"without it while the others are adjusted -- a different model "
+                                f"inside one meta-analysis.",
+                                is_error=True,
+                            )
+                            error_found = True
+                        else:
+                            report(f"PASS: Covariate '{c}' resolved from the sample files (.psam).")
+
                     if missing_covs:
-                        report(f"FAIL: Missing requested covariates: {', '.join(missing_covs)}", is_error=True)
+                        report(f"FAIL: Missing requested covariates: {', '.join(missing_covs)} "
+                               f"(not in {os.path.basename(cov_source)} nor in any study .psam)",
+                               is_error=True)
                         error_found = True
         else:
             report(f"FAIL: Covariate source '{cov_source}' not found.", is_error=True)
@@ -255,16 +298,6 @@ def main():
 
         # Cache each strata column's observed values once, from whichever source
         # holds it. The sample file wins, matching prepare_{phenotypes,covariates}.
-        sample_frames = {}
-        for s in selected_studies:
-            sample_file = s.get("sample_file", "")
-            if sample_file and os.path.exists(sample_file) and sample_file not in sample_frames:
-                try:
-                    sample_frames[sample_file] = read_sample_file(sample_file)
-                except Exception as exc:
-                    report(f"FAIL: Could not read sample file for {s['study_id']}: {exc}", is_error=True)
-                    error_found = True
-
         for name, column, values in filtering_strata:
             observed = set()
             found_in = []
