@@ -626,6 +626,49 @@ data_genetic <- data_genetic |>
   dplyr::ungroup() |>
   dplyr::select(-rk)
 
+# PHENO balance per study ====
+# PHENO is requested as a GWAS covariate, and prepare_covariates.py drops any
+# covariate with fewer than two distinct values. Several EPIC studies are almost
+# entirely cases (Ecvd_01/02/03 carry 6-14 controls in several thousand
+# samples), and the proteomics intersect and dedup can easily take that to zero.
+# A study whose retained samples are all cases would then be fitted WITHOUT
+# disease adjustment while the others are fitted with it -- silently, inside one
+# meta-analysis. Report the balance on the retained set so that is a decision
+# rather than a surprise.
+pheno_balance <- data_genetic |>
+  dplyr::filter(has_pheno_col) |>
+  dplyr::group_by(STUDY) |>
+  dplyr::summarise(
+    n        = dplyr::n(),
+    cases    = sum(PHENO_geno == "2", na.rm = TRUE),
+    controls = sum(PHENO_geno == "1", na.rm = TRUE),
+    .groups  = "drop"
+  ) |>
+  dplyr::mutate(minority = pmin(cases, controls)) |>
+  dplyr::arrange(minority)
+
+if (nrow(pheno_balance)) {
+  message("\nPHENO balance on retained samples (covariate usability):")
+  for (i in seq_len(nrow(pheno_balance))) {
+    r <- pheno_balance[i, ]
+    note <- if (r$minority == 0) "  <== INVARIANT: PHENO will be DROPPED for this study"
+            else if (r$minority < 10) "  <== near-invariant, estimate unstable"
+            else ""
+    message(sprintf("  %-16s %6d samples  %6d cases / %6d controls%s",
+                    r$STUDY, r$n, r$cases, r$controls, note))
+  }
+  degenerate <- pheno_balance$STUDY[pheno_balance$minority == 0]
+  if (length(degenerate)) {
+    warning("PHENO is invariant in ", length(degenerate), " study/studies (",
+            paste(degenerate, collapse = ", "), "). prepare_covariates.py will ",
+            "drop it there, so those studies are fitted without disease ",
+            "adjustment while others are adjusted -- a different model inside ",
+            "the same meta-analysis. Either drop PHENO from --covariates for ",
+            "the whole run, or exclude these studies.",
+            call. = FALSE, immediate. = TRUE)
+  }
+}
+
 # make phenofile ====
 # The phenofile IID must be the genotype IID (IID_geno) so REGENIE can match it to
 # the PLINK2 .psam. The Sex / Age_Recr / PlateId covariates were already joined
