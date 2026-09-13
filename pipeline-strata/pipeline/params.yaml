@@ -107,15 +107,15 @@ info_score:        0.3
 meta_group:       "ever,never"
 # Label for that within-study result. Must not collide with a stratum name; it
 # becomes a group in its own right downstream.
-meta_group_label: "strata_meta"
+meta_group_label: "meta"
 
 # Cross-study meta, run independently within each named group so each gets its
 # own pooled sumstats. Listing meta_group_label here meta-analyses the
 # within-study metas across studies too -- the "+1" in N+1 results for N strata.
 #   ever         -> pooled across studies, ever smokers only
 #   never        -> pooled across studies, never smokers only
-#   strata_meta  -> pooled across studies of the per-study ever+never metas
-meta_study:       "ever,never,strata_meta"
+#   meta         -> pooled across studies of the per-study ever+never metas
+meta_study:       "ever,never,meta"
 king_cutoff:       0.0884      # 2nd-degree relatedness
 
 # --- LD pruning ---

@@ -10,7 +10,7 @@
 
 # Script: src/006_staging.sh
 # Purpose: Stage across-study meta-analysis files for transfer to collaborators.
-# Strata-aware: outputs are staged as <transfer>/<stratum>/<feature>.tsv.gz.
+# Strata-aware: outputs are staged as <transfer>/<seqid>/<group>.tsv.gz.
 
 set -euo pipefail
 
@@ -46,9 +46,11 @@ Usage:
   sbatch src/006_staging.sh [options]
 
 Finds across-study meta-analysis files with this pipeline layout:
-  <outdir>/.../meta/<feature>/<stratum>/013_QC/meta.tsv.gz
+  <outdir>/.../meta/<seqid>/<group>/013_QC/meta.tsv.gz
 and stages them as:
-  <transfer>/<stratum>/<feature>.tsv.gz
+  <transfer>/<seqid>/<group>.tsv.gz
+e.g. for two strata plus their meta:
+  <transfer>/21231-3/{ever,never,meta}.tsv.gz
 
 Stages each file with the feature directory name:
   <transfer-dir>/<feature>.tsv.gz
@@ -168,11 +170,13 @@ for src in "${FILES[@]}"; do
     continue
   fi
 
-  # One subdirectory per stratum. The frozen tree staged a flat
-  # "<feature>.tsv.gz" because only one group was ever meta-analysed; here
-  # several strata share a feature name, so a flat layout would collide (and
-  # the duplicate-destination guard below would abort the whole staging run).
-  rel_dest="${group}/${feature}.tsv.gz"
+  # One directory per protein, one file per group inside it:
+  #     <transfer>/<seqid>/<group>.tsv.gz
+  # so everything for a protein sits together and a collaborator can compare
+  # the strata side by side without walking parallel trees. The frozen tree
+  # staged a flat "<feature>.tsv.gz" because only one group was ever
+  # meta-analysed; with several groups per protein that would collide.
+  rel_dest="${feature}/${group}.tsv.gz"
   dest="${ABS_TRANSFER_DIR}/${rel_dest}"
 
   for idx in "${!DEST_KEYS[@]}"; do
