@@ -5,11 +5,16 @@
 #SBATCH --time=8:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=2
+#SBATCH --partition=high_p
 #SBATCH --open-mode=truncate
 
 # Compare pQTL effects between strata on the staged results.
 #
-#   bash src/008_comparison/run_comparison.sh --staged <dir> --out <dir>
+#   sbatch src/008_comparison/run_comparison.sh --staged <dir> --out <dir>
+#   bash   src/008_comparison/run_comparison.sh --staged <dir> --out <dir>
+#
+# Submit from the project root: the SBATCH --output paths above are relative to
+# the submit directory.
 #
 # Reference data (LD panel, gene map, HLA window, cis window) is read straight
 # out of pipeline/params.yaml so this cannot drift from what the pipeline used.
@@ -19,8 +24,11 @@
 
 set -euo pipefail
 
+# Under SLURM the job runs from the slurmd spool directory and this script is a
+# COPY placed there, so BASH_SOURCE does not point into the project. Everything
+# is therefore resolved from SLURM_SUBMIT_DIR when it is set.
 SCRIPT_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
-PROJ_ROOT="${GWAS_PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/../.." && pwd)}}"
+PROJ_ROOT="${SLURM_SUBMIT_DIR:-${GWAS_PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}}"
 [[ -f "${PROJ_ROOT}/.env" ]] && { set -a; source "${PROJ_ROOT}/.env"; set +a; }
 mkdir -p "${PROJ_ROOT}/src/logs"
 
@@ -79,7 +87,13 @@ if command -v conda >/dev/null 2>&1; then
   [[ -d "${ENV_DIR}/herit" ]] && conda activate "${ENV_DIR}/herit"
 fi
 
-python3 "${SCRIPT_DIR}/compare_strata.py" \
+# compare_strata.py lives beside this script in the project, NOT beside the
+# spool copy SLURM runs.
+CMP_PY="${PROJ_ROOT}/src/008_comparison/compare_strata.py"
+[[ -f "$CMP_PY" ]] || CMP_PY="${SCRIPT_DIR}/compare_strata.py"
+[[ -f "$CMP_PY" ]] || { echo "ERROR: cannot find compare_strata.py (looked in ${PROJ_ROOT}/src/008_comparison and ${SCRIPT_DIR})" >&2; exit 1; }
+
+python3 "$CMP_PY" \
   --staged "$STAGED" \
   --out "$OUT" \
   --strata "$STRATA" \
