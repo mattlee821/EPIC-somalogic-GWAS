@@ -211,6 +211,25 @@ if [[ -n "$INCLUDE_PROTEINS" ]]; then
   fi
 fi
 
+# A samplesheet built against a different genetics directory is the single
+# failure that has cost the most time here: the paths still resolve, the files
+# exist, and the run dies 27 tasks later on a missing PHENO column. Check the
+# samplesheet agrees with the genetics directory this .env names, before
+# anything is submitted.
+if [[ -n "${GWAS_GENETICS_DIR:-}" && -f "$ABS_SAMPLESHEET" ]]; then
+  SS_BAD="$(awk -F, -v want="${GWAS_GENETICS_DIR%/}" '
+    NR==1 { for (i=1;i<=NF;i++) if ($i=="sample_file") c=i; next }
+    c && $c !~ "^"want"/" { print $1 }' "$ABS_SAMPLESHEET" | head -5)"
+  if [[ -n "$SS_BAD" ]]; then
+    echo "ERROR: samplesheet does not match GWAS_GENETICS_DIR." >&2
+    echo "  GWAS_GENETICS_DIR : ${GWAS_GENETICS_DIR}" >&2
+    echo "  samplesheet       : ${ABS_SAMPLESHEET}" >&2
+    echo "  studies pointing elsewhere: $(echo "$SS_BAD" | tr '\n' ' ')" >&2
+    echo "  The samplesheet is stale. Rebuild it:  sbatch src/003_data-phenotype.sh" >&2
+    exit 1
+  fi
+fi
+
 if ! command -v conda >/dev/null 2>&1; then
   echo "ERROR: conda is required to launch the GWAS pipeline." >&2
   exit 1
