@@ -1,0 +1,47 @@
+Staged:     /WHERE/epic-gwas/transfer-strata
+Out:        analysis/comparison
+Strata:     ever,never   (reference: meta, P < 5e-8)
+LD ref:     /WHERE/epic-gwas/data/herit/ldref
+Gene map:   /WHERE/epic-gwas/data/herit/protein_gene_map.tsv
+Annotation: <none, no control set>
+
+Comparing 'ever' vs 'never', discovery from 'meta' at P < 5e-08
+15 protein(s); 0 flagged as controls
+
+  12894-3         3 primary,   2 secondary index variant(s)
+  19207-119       0 primary,   1 secondary index variant(s)
+  23623-48        4 primary,   3 secondary index variant(s)
+  2421-7          0 primary,   1 secondary index variant(s)
+  4125-52         4 primary,   3 secondary index variant(s)
+  4153-11         7 primary,   3 secondary index variant(s)
+  9387-13         1 primary,   0 secondary index variant(s)
+
+======================================================================
+GLOBAL TEST -- is the z distribution heavier than N(0,1)?
+set                             n   mean z   var z      KS p   p<.05
+primary_targeted               19    0.217    0.83     0.656    0.00
+secondary_selection_biased     13   -0.020    6.44     0.622    0.31
+Under the null var(z) = 1. Values above 1 in the targeted set but not
+the controls indicate genuine between-stratum heterogeneity.
+
+======================================================================
+PER-LOCUS
+  index variants            : 32
+  primary / secondary       : 19 / 13
+  failed QC (EAF or I2)     : 0
+  hypothesis tests          : 19
+  Bonferroni-significant    : 0
+
+Skipped 8 protein(s):
+  11636-33     no variant reached the threshold
+  13459-30     no variant reached the threshold
+  14047-78     no variant reached the threshold
+  17335-18     no variant reached the threshold
+  18277-28     no variant reached the threshold
+  21231-3      no variant reached the threshold
+  24674-22     no variant reached the threshold
+  25051-104    no variant reached the threshold
+
+Wrote analysis/comparison/pqtl_comparison.tsv
+      analysis/comparison/global_test.tsv
+      (no plots: matplotlib unavailable)

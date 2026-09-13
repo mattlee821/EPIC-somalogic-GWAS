@@ -66,11 +66,28 @@ CIS_KB="$(yml cis_window_kb)"
 HLA="$(yml hla_region)"
 CLUMP_R2="$(yml herit_clump_r2)"
 
-# Default the panel annotation to the one sitting beside the protein list, so
-# random-control proteins are recognised as the empirical null without asking.
+# Find the panel annotation so random-control proteins are recognised as the
+# empirical null. GWAS_INCLUDE_PROTEINS is only a default and is usually NOT the
+# panel a given run used -- the 13 Sep run passed --proteins smoking-panel.txt
+# while .env still pointed at test.txt, so the controls went unlabelled and the
+# calibration check was silently lost. Fall back to globbing the phenotype
+# directory, which is where find_proteins.R writes them.
 if [[ -z "$ANNOT" && -n "${GWAS_INCLUDE_PROTEINS:-}" ]]; then
   CAND="${GWAS_INCLUDE_PROTEINS%.txt}.annot.tsv"
   [[ -f "$CAND" ]] && ANNOT="$CAND"
+fi
+if [[ -z "$ANNOT" && -n "${GWAS_PHENO_DIR:-}" ]]; then
+  mapfile -t CANDS < <(ls -1 "${GWAS_PHENO_DIR}"/*.annot.tsv 2>/dev/null)
+  if [[ ${#CANDS[@]} -eq 1 ]]; then
+    ANNOT="${CANDS[0]}"
+  elif [[ ${#CANDS[@]} -gt 1 ]]; then
+    echo "NOTE: several .annot.tsv files under ${GWAS_PHENO_DIR}; pass --annot to choose:" >&2
+    printf '  %s\n' "${CANDS[@]}" >&2
+  fi
+fi
+if [[ -z "$ANNOT" ]]; then
+  echo "WARNING: no panel annotation found, so no control set. The calibration" >&2
+  echo "         check (var(z)~1 in controls) will be unavailable. Pass --annot." >&2
 fi
 
 echo "Staged:     $STAGED"
