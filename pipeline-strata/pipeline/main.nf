@@ -403,18 +403,30 @@ workflow {
             }
         }
 
-    // 8b. Within-study METAL meta across a PAIR of strata (optional).
-    //     params.meta_group names the two strata, e.g. "ever,never". For an
-    //     exposure split this is usually NOT what you want: pooling ever+never
-    //     just reconstructs the unstratified analysis. Compare per-stratum
-    //     effect sizes instead. Kept because it is occasionally useful for
-    //     sensitivity checks, and disabled by default.
+    // 8b. Within-study METAL meta ACROSS THE STRATA, one result per study.
+    //     params.meta_group names them, e.g. "ever,never".
+    //
+    //     This is NOT the same as the unstratified GWAS, and the difference is
+    //     the point. The unstratified analysis fits ONE SNP effect on the
+    //     pooled sample; meta-analysing the strata lets each stratum have its
+    //     own effect and pools them by inverse variance. The two diverge
+    //     exactly when the effect differs by stratum -- which is the hypothesis
+    //     under test. Its output is labelled params.meta_group_label and, when
+    //     that label is listed in params.meta_study, is itself meta-analysed
+    //     across studies, giving the "+1" in N+1 results for N strata.
     def meta_group_raw = (params.meta_group ?: "").toString().trim()
     def meta_group_names = (meta_group_raw.toLowerCase() in ['', 'false', '0', 'no']) ?
         [] : meta_group_raw.split(',').collect { it.trim() }.findAll { it }
-    if (meta_group_names && meta_group_names.size() != 2) {
+    if (meta_group_names && meta_group_names.size() < 2) {
         throw new IllegalArgumentException(
-            "params.meta_group must name exactly two strata (e.g. \"ever,never\") or be empty; got: ${meta_group_names}"
+            "params.meta_group must name at least two strata (e.g. \"ever,never\") or be empty; got: ${meta_group_names}"
+        )
+    }
+    def meta_group_label = (params.meta_group_label ?: 'strata_meta').toString().trim()
+    if (meta_group_names && strata_def.containsKey(meta_group_label)) {
+        throw new IllegalArgumentException(
+            "params.meta_group_label '${meta_group_label}' collides with a defined stratum. " +
+            "The within-study meta needs a label of its own."
         )
     }
     meta_group_names.each { name ->
@@ -425,7 +437,7 @@ workflow {
             )
         }
     }
-    def meta_group_enabled = meta_group_names.size() == 2
+    def meta_group_enabled = meta_group_names.size() >= 2
     def ch_meta_group_qc_out = Channel.empty()
     def ch_meta_group_for_meta = Channel.empty()
 
@@ -433,8 +445,11 @@ workflow {
         def ch_meta_group_in = ch_gwas_qc_results
             .filter { sid, grp, prot, gwas, metrics -> meta_group_names.contains(grp.toString()) }
             .map { sid, grp, prot, gwas, metrics -> tuple("${sid}__${prot}", sid, prot, gwas) }
-            .groupTuple(by: 0, size: 2, remainder: true)
-            .filter { key, sids, prots, gwases -> gwases.size() == 2 }
+            .groupTuple(by: 0, size: meta_group_names.size(), remainder: true)
+            // Only meta-analyse a study that has EVERY named stratum. A partial
+            // set would silently produce a within-study meta over a different
+            // stratum mix for some studies than others.
+            .filter { key, sids, prots, gwases -> gwases.size() == meta_group_names.size() }
             .map { key, sids, prots, gwases ->
                 def files = gwases instanceof java.util.Collection ? gwases : [gwases]
                 tuple(sids[0].toString(), prots[0].toString(), files)

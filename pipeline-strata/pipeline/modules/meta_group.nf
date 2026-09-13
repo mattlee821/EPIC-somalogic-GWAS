@@ -2,8 +2,9 @@ process META_GROUP {
   label        'medium'
   conda        "${params.env_dir}/py_qc"
   publishDir   params.outdir, mode: 'rellink', saveAs: { name ->
-    def metalDir = "${study_id}/${protein_id}/meta/010_METAL"
-    def qcDir = "${study_id}/${protein_id}/meta/011_QC"
+    def label = params.meta_group_label ?: 'strata_meta'
+    def metalDir = "${study_id}/${protein_id}/${label}/010_METAL"
+    def qcDir = "${study_id}/${protein_id}/${label}/011_QC"
     if (name == 'meta.tsv.gz' || name == 'metrics.tsv') {
       return "${qcDir}/${name}"
     }
@@ -14,7 +15,7 @@ process META_GROUP {
   tuple val(study_id), val(protein_id), path(sumstats_files, stageAs: 'meta_inputs??/*')
 
   output:
-  tuple val(study_id), val("meta"), val(protein_id), path("meta.tsv.gz"), path("metrics.tsv"), emit: all_out
+  tuple val(study_id), val(params.meta_group_label ?: 'strata_meta'), val(protein_id), path("meta.tsv.gz"), path("metrics.tsv"), emit: all_out
   path "meta.tsv.gz", emit: gwas_files
   path "metrics.tsv", emit: metrics_files
   path "meta.tbl.info", optional: true, emit: info_files
