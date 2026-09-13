@@ -77,8 +77,15 @@ COVAR_FILE=""
 # also the grouping variable; here the grouping variable is smoking/BMI, so it
 # has to be requested explicitly.
 COVARIATES="Sex,Age_Recr,PHENO"
+# Deliberately EMPTY. Anything set here is passed on the Nextflow command line,
+# and CLI params OVERRIDE -params-file -- so a default here silently shadows
+# pipeline/params.yaml. That is what dropped the third meta group: params.yaml
+# said "ever,never,meta" and this wrapper quietly overrode it with "ever,never".
+# These are now only passed when given explicitly on this script's command line.
 META_GROUP=""
-META_STUDY="ever,never"
+META_STUDY=""
+META_GROUP_SET=0
+META_STUDY_SET=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -120,10 +127,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --meta-group)
       META_GROUP="$2"
+      META_GROUP_SET=1
       shift 2
       ;;
     --meta-study)
       META_STUDY="$2"
+      META_STUDY_SET=1
       shift 2
       ;;
     -h|--help)
@@ -262,8 +271,8 @@ echo "Studies:  ${INCLUDE_STUDIES:-ALL}"
 echo "Proteins: ${INCLUDE_PROTEINS:-ALL}${BATCH_ARG:+ (batch: $BATCH_NAME)}"
 echo "Output:   $ABS_RESULT_DIR"
 echo "Covars:   ${COVARIATES}"
-echo "Meta-group: ${META_GROUP:-<disabled>}"
-echo "Meta-study: ${META_STUDY:-false}"
+echo "Meta-group: ${META_GROUP:-<from params.yaml>}"
+echo "Meta-study: ${META_STUDY:-<from params.yaml>}"
 echo "Partition (tasks): ${GWAS_PARTITION:-low_p}"
 echo "=========================================="
 
@@ -296,12 +305,12 @@ if [[ -n "$COVARIATES" ]]; then
   NF_CMD+=(--covariates "$COVARIATES")
 fi
 
-if [[ -n "$META_GROUP" ]]; then
+if [[ "$META_GROUP_SET" -eq 1 ]]; then
   NF_CMD+=(--meta_group "$META_GROUP")
 fi
 
 
-if [[ -n "$META_STUDY" ]]; then
+if [[ "$META_STUDY_SET" -eq 1 ]]; then
   NF_CMD+=(--meta_study "$META_STUDY")
 fi
 
