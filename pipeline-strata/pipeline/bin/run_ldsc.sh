@@ -31,6 +31,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --meta) meta="$2"; shift 2 ;;
     --protein_id) protein_id="$2"; shift 2 ;;
+    --group) group="$2"; shift 2 ;;
     --ldsc_home) ldsc_home="$2"; shift 2 ;;
     --ref_dir) ref_dir="$2"; shift 2 ;;
     --hm3) hm3="$2"; shift 2 ;;
@@ -44,7 +45,11 @@ mkdir -p "$outdir"
 [[ -n "$out_row" ]] || out_row="${outdir}/ldsc.tsv"
 log="${outdir}/ldsc.run.log"
 
-header=$'protein\tn_snps\tintercept\tintercept_se\th2\th2_se\tlambda_gc'
+# The stratum MUST be in the row, not just the publish path. Several strata are
+# analysed per protein, and COHORT_SUMMARY joins LDSC to heritability on the key
+# columns -- keyed on protein alone, two strata of each cross-join into four
+# meaningless rows per protein.
+header=$'protein\tgroup\tn_snps\tintercept\tintercept_se\th2\th2_se\tlambda_gc'
 
 # Emit an NA row and exit cleanly; used for any non-fatal per-protein failure so
 # the protein still appears in the consolidated metrics_ldsc.tsv.
@@ -52,7 +57,7 @@ emit_na() {
   local reason="$1" nsnp="${2:-NA}"
   echo "WARNING: ${protein_id}: ${reason}" | tee -a "$log" >&2
   printf '%s\n' "$header" > "$out_row"
-  printf '%s\t%s\tNA\tNA\tNA\tNA\tNA\n' "$protein_id" "$nsnp" >> "$out_row"
+  printf '%s\t%s\t%s\tNA\tNA\tNA\tNA\tNA\n' "$protein_id" "${group:-NA}" "$nsnp" >> "$out_row"
   exit 0
 }
 
@@ -114,6 +119,6 @@ h2_se=$(echo "$h2_line"    | sed -E 's/.*\(([0-9.eE+-]+)\).*/\1/')
 lam=$(echo "$lam_line"     | sed -E 's/.*Lambda GC:[[:space:]]*([0-9.eE+-]+).*/\1/')
 
 printf '%s\n' "$header" > "$out_row"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$protein_id" "${nsnp}" "${icpt:-NA}" "${icpt_se:-NA}" "${h2:-NA}" "${h2_se:-NA}" "${lam:-NA}" >> "$out_row"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$protein_id" "${group:-NA}" "${nsnp}" "${icpt:-NA}" "${icpt_se:-NA}" "${h2:-NA}" "${h2_se:-NA}" "${lam:-NA}" >> "$out_row"
 echo "${protein_id}: intercept=${icpt:-NA} (${icpt_se:-NA})  h2=${h2:-NA} (${h2_se:-NA})  lambda=${lam:-NA}" | tee -a "$log"

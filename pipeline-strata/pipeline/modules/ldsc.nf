@@ -19,6 +19,7 @@ process LDSC {
   bash ${projectDir}/bin/run_ldsc.sh \\
     --meta "${meta_tsv}" \\
     --protein_id "${protein_id}" \\
+    --group "${group}" \\
     --ldsc_home "${params.ldsc_home}" \\
     --ref_dir "${params.ldsc_ref_dir}" \\
     --hm3 "${params.ldsc_hm3}" \\

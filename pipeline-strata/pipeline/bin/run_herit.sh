@@ -23,6 +23,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --meta) meta="$2"; shift 2 ;;
     --protein_id) protein_id="$2"; shift 2 ;;
+    --group) group="$2"; shift 2 ;;
     --ld_ref) ld_ref="$2"; shift 2 ;;
     --protein_map) protein_map="$2"; shift 2 ;;
     --ldsc_home) ldsc_home="$2"; shift 2 ;;
@@ -42,12 +43,13 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 mkdir -p "$outdir"
 [[ -n "$out_row" ]] || out_row="${outdir}/herit.tsv"
 log="${outdir}/herit.run.log"
-header=$'protein\tn_index\tn_cis\tn_trans\th2_cis\th2_trans\th2_polygenic\th2_total\tintercept\tintercept_se\tlambda_gc'
+# See run_ldsc.sh: the stratum belongs in the row, or the join cross-products.
+header=$'protein\tgroup\tn_index\tn_cis\tn_trans\th2_cis\th2_trans\th2_polygenic\th2_total\tintercept\tintercept_se\tlambda_gc'
 
 emit_na() {
   echo "WARNING: ${protein_id}: $1" | tee -a "$log" >&2
   printf '%s\n' "$header" > "$out_row"
-  printf '%s\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\n' "$protein_id" >> "$out_row"
+  printf '%s\t%s\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\n' "$protein_id" "${group:-NA}" >> "$out_row"
   exit 0
 }
 
@@ -176,8 +178,8 @@ total=$(awk -v c="$h2_cis" -v t="$h2_trans" -v p="$poly_h2" 'BEGIN{
   s=c+t; if (p!="NA") s+=p; printf "%.6g", s }')
 
 printf '%s\n' "$header" > "$out_row"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$protein_id" "${n_index:-0}" "${n_cis:-0}" "${n_trans:-0}" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$protein_id" "${group:-NA}" "${n_index:-0}" "${n_cis:-0}" "${n_trans:-0}" \
   "${h2_cis:-NA}" "${h2_trans:-NA}" "${poly_h2}" "${total}" \
   "${intercept}" "${intercept_se}" "${lambda}" >> "$out_row"
 echo "${protein_id}: cis=${h2_cis} trans=${h2_trans} poly=${poly_h2} total=${total}" | tee -a "$log"

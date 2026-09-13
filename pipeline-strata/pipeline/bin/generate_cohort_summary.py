@@ -39,26 +39,36 @@ def write_ldsc_herit_summary(ldsc_file: str, herit_file: str, outdir: Path) -> N
     """Join the LDSC and heritability per-protein metrics into one table.
 
     Both tables share intercept/lambda column names but mean different things
-    (LDSC = full-genome; heritability = polygenic remainder), so every non-protein
+    (LDSC = full-genome; heritability = polygenic remainder), so every non-key
     column is namespaced with an ldsc_/herit_ prefix before the outer join.
+
+    The join key is (protein, group). Keyed on protein alone, a run with two
+    strata cross-joins LDSC's two rows against heritability's two rows and
+    yields four meaningless rows per protein, with no way to tell which stratum
+    any figure belongs to.
     """
     ldsc = _read_metrics_table(ldsc_file)
     herit = _read_metrics_table(herit_file)
     if ldsc is None and herit is None:
         return
 
+    # Join on whichever key columns both sides actually carry, so rows written
+    # before 'group' existed still merge instead of raising.
+    keys = [k for k in ("protein", "group")
+            if (ldsc is None or k in ldsc.columns) and (herit is None or k in herit.columns)]
+
     def _prefix(df: pd.DataFrame, pre: str) -> pd.DataFrame:
-        return df.rename(columns={c: f"{pre}{c}" for c in df.columns if c != "protein"})
+        return df.rename(columns={c: f"{pre}{c}" for c in df.columns if c not in keys})
 
     if ldsc is not None and herit is not None:
         merged = pd.merge(_prefix(ldsc, "ldsc_"), _prefix(herit, "herit_"),
-                          on="protein", how="outer")
+                          on=keys, how="outer")
     elif ldsc is not None:
         merged = _prefix(ldsc, "ldsc_")
     else:
         merged = _prefix(herit, "herit_")
 
-    merged = merged.sort_values("protein")
+    merged = merged.sort_values(keys)
     merged.to_csv(outdir / "metrics_ldsc-herit.tsv", sep="\t", index=False)
 
 

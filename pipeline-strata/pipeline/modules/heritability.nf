@@ -18,6 +18,7 @@ process HERITABILITY {
   bash ${projectDir}/bin/run_herit.sh \\
     --meta "${meta_tsv}" \\
     --protein_id "${protein_id}" \\
+    --group "${group}" \\
     --protein_map "${params.protein_gene_map}" \\
     ${ld_ref} \\
     --ldsc_home "${params.ldsc_home}" \\
