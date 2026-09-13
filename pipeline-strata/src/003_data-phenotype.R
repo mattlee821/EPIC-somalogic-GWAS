@@ -31,21 +31,40 @@ load_dot_env <- function(env_file = ".env") {
   }
 }
 
-project_root <- Sys.getenv("GWAS_PROJECT_ROOT")
-search_paths <- c(
-  if (project_root != "") project_root else NULL,
-  ".",
-  "..",
-  "../.."
-)
+# Which .env is loaded decides which genetics directory this script reads, so
+# the search order matters and the answer is logged.
+#
+# THE SCRIPT'S OWN TREE WINS. Searching $GWAS_PROJECT_ROOT first meant that a
+# shell which had sourced the root project's .env -- e.g. after running
+# src/002_data-genetics.sh -- silently pointed this script at the root tree's
+# configuration, and it built a samplesheet against the wrong genetics
+# directory without saying so. Twice.
+script_dir <- local({
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grepl("^--file=", a)])
+  if (length(f)) dirname(normalizePath(f[1], mustWork = FALSE)) else NA_character_
+})
 
+search_paths <- c(
+  if (!is.na(script_dir)) file.path(script_dir, "..") else NULL,   # pipeline-strata/.env
+  Sys.getenv("GWAS_PROJECT_ROOT"),
+  ".", "..", "../.."
+)
+search_paths <- search_paths[nzchar(search_paths)]
+
+env_loaded <- NA_character_
 for (p in search_paths) {
   env_p <- file.path(p, ".env")
   if (file.exists(env_p)) {
     load_dot_env(env_p)
+    env_loaded <- normalizePath(env_p, mustWork = FALSE)
     break
   }
 }
+if (is.na(env_loaded)) {
+  stop("No .env found. Looked in: ", paste(search_paths, collapse = ", "))
+}
+message("Loaded .env: ", env_loaded)
 
 get_env <- function(key, default = NULL) {
   val <- Sys.getenv(key)
@@ -349,6 +368,23 @@ if (length(psam_files) == 0) {
 }
 message("Genetics layout: ", if (genetics_flat) "flat" else "nested",
         " -- ", length(psam_files), " study fileset(s) under ", genetics_path)
+
+# A .psam without PHENO cannot support disease-status adjustment. That is a
+# legitimate configuration, but it has twice been the symptom of reading the
+# wrong genetics directory, so say it plainly rather than leaving it to fail
+# later in PREPARE_COVARIATES.
+first_psam_cols <- tryCatch({
+  hdr <- readLines(psam_files[1], n = 1)
+  strsplit(sub("^#", "", trimws(hdr)), "[[:space:]]+")[[1]]
+}, error = function(e) character(0))
+if (length(first_psam_cols) &&
+    !any(toupper(first_psam_cols) %in% c("PHENO", "PHENO1"))) {
+  warning("The .psam files under ", genetics_path, " carry no PHENO column ",
+          "(found: ", paste(first_psam_cols, collapse = ", "), "). Disease status ",
+          "cannot be used as a covariate from this genetics directory. If that is ",
+          "unexpected, check GWAS_GENETICS_DIR in ", env_loaded,
+          call. = FALSE, immediate. = TRUE)
+}
 
 # Resolve a study's PLINK2 prefix under whichever layout is in use.
 study_pfile_prefix <- function(study) {
