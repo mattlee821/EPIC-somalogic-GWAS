@@ -16,6 +16,11 @@ genes <- unique(toupper(trimws(unlist(strsplit(genes, "[,/]")))))
 genes <- genes[nzchar(genes)]
 
 out_file <- arg_val("--out", NA_character_)
+# Random aptamers appended as null controls: they carry no hypothesis, so they
+# show how the ever/never comparison behaves when nothing is expected. Seeded so
+# the same panel is reproducible across runs.
+n_random <- as.integer(arg_val("--random", "0"))
+seed     <- as.integer(arg_val("--seed", "42"))
 
 # --- .env ------------------------------------------------------------------
 load_dot_env <- function(f) {
@@ -84,11 +89,60 @@ cat(sprintf("Requested %d genes: %d on the panel, %d absent.\n",
 if (length(missing)) cat("Absent: ", paste(missing, collapse = ", "), "\n", sep = "")
 cat("Usable aptamers (present in the phenofile): ", length(found), "\n", sep = "")
 
-if (!is.na(out_file) && length(found)) {
+# --- random null controls ---------------------------------------------------
+random_ids <- character(0)
+if (n_random > 0) {
+  if (!length(pheno_cols)) {
+    stop("--random needs the phenofile to draw from; GWAS_PHENO_FILE was not found.")
+  }
+  # Draw only from real aptamers that are present in the phenofile, so the
+  # controls are genuine measured proteins rather than metadata columns.
+  pool <- setdiff(intersect(as.character(aux$SeqId), pheno_cols), found)
+  if (length(pool) < n_random) {
+    stop("Only ", length(pool), " aptamers available to sample ", n_random, " from.")
+  }
+  set.seed(seed)
+  random_ids <- sort(sample(pool, n_random))
+
+  cat("\n", strrep("=", 76), "\n", sep = "")
+  cat("RANDOM NULL CONTROLS (seed ", seed, "):\n", sep = "")
+  for (sid in random_ids) {
+    i <- match(sid, as.character(aux$SeqId))
+    cat(sprintf("    %-12s %-46s symbol=%s\n", sid,
+                substr(as.character(aux$Target[i]), 1, 46),
+                as.character(aux$EntrezGeneSymbol[i])))
+  }
+}
+
+panel <- c(found, random_ids)
+
+if (!is.na(out_file) && length(panel)) {
   dir.create(dirname(out_file), recursive = TRUE, showWarnings = FALSE)
-  writeLines(found, out_file)
-  cat("\nWrote ", out_file, " with ", length(found), " SeqIds.\n", sep = "")
-  cat("Run it with:\n  sbatch src/005_run.sh --out <dir> --proteins ", normalizePath(out_file, mustWork = FALSE), "\n", sep = "")
+  # The pipeline reads this as a bare SeqId list -- every non-empty line becomes
+  # a protein name, so it can carry no comments. The provenance of each entry
+  # goes in a companion file the pipeline never reads.
+  writeLines(panel, out_file)
+
+  annot <- sub("\\.txt$", "", out_file)
+  annot <- paste0(annot, ".annot.tsv")
+  idx <- match(panel, as.character(aux$SeqId))
+  write.table(
+    data.frame(
+      seqid  = panel,
+      source = c(rep("targeted", length(found)), rep("random_control", length(random_ids))),
+      gene   = as.character(aux$EntrezGeneSymbol)[idx],
+      target = as.character(aux$Target)[idx],
+      stringsAsFactors = FALSE
+    ),
+    annot, sep = "\t", quote = FALSE, row.names = FALSE
+  )
+
+  cat("\nWrote ", out_file, "\n", sep = "")
+  cat("  ", length(found), " targeted + ", length(random_ids),
+      " random = ", length(panel), " SeqIds\n", sep = "")
+  cat("Wrote ", annot, " (provenance; not read by the pipeline)\n", sep = "")
+  cat("\nRun it with:\n  sbatch src/005_run.sh --out <dir> --proteins ",
+      normalizePath(out_file, mustWork = FALSE), "\n", sep = "")
 } else if (is.na(out_file)) {
   cat("\nPass --out <file> to write these SeqIds as a --proteins list.\n")
 }
