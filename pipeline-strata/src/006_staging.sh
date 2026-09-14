@@ -22,14 +22,27 @@ else
   DEFAULT_PROJ_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 fi
 
-source_env_file() {
-  local env_file="$1"
-  if [[ -f "$env_file" ]]; then
-    set -a
-    source "$env_file"
-    set +a
-  fi
+# Shared .env loader (src/lib/env.sh): an exported variable always beats .env.
+_gwas_find_lib() {
+  local c
+  for c in "${SLURM_SUBMIT_DIR:-/nonexistent}/src/lib/env.sh" \
+           "${DEFAULT_PROJ_ROOT:-/nonexistent}/src/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/../lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../lib/env.sh"; do
+    if [[ -f "$c" ]]; then printf '%s
+' "$c"; return 0; fi
+  done
+  return 1
 }
+_GWAS_ENV_LIB="$(_gwas_find_lib)" || {
+  echo "ERROR: src/lib/env.sh not found. The tree is incompletely synced;" >&2
+  echo "       rsync pipeline-strata/ again (see TRANSFER.md)." >&2
+  exit 1
+}
+# shellcheck disable=SC1090
+source "$_GWAS_ENV_LIB"
 
 resolve_path() {
   local path="$1"
@@ -74,17 +87,21 @@ PROJ_ROOT="${GWAS_PROJECT_ROOT:-$DEFAULT_PROJ_ROOT}"
 mkdir -p "${PROJ_ROOT}/src/logs"
 
 RESULT_DIR="${GWAS_RESULTS_DIR:-${PROJ_ROOT}/results}"
+RESULT_SRC="${GWAS_RESULTS_DIR:+.env/environment}"; RESULT_SRC="${RESULT_SRC:-default}"
 TRANSFER_DIR="${GWAS_STAGING_DIR:-${PROJ_ROOT}/transfer}"
+TRANSFER_SRC="${GWAS_STAGING_DIR:+.env/environment}"; TRANSFER_SRC="${TRANSFER_SRC:-default}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out|--outdir)
       RESULT_DIR="$2"
+      RESULT_SRC="--out"
       shift 2
       ;;
     --transfer|--transfer-dir)
       TRANSFER_DIR="$2"
+      TRANSFER_SRC="--transfer"
       shift 2
       ;;
     --dry-run)
@@ -105,6 +122,16 @@ done
 
 ABS_RESULT_DIR="$(resolve_path "$RESULT_DIR")"
 ABS_TRANSFER_DIR="$(resolve_path "$TRANSFER_DIR")"
+
+# Say where each path came from. A bare "directory not found" is not diagnosable
+# when the value may have arrived from .env, the environment, or a flag.
+echo "=========================================="
+echo " 006_staging"
+echo "=========================================="
+echo ".env loaded : ${GWAS_ENV_FILE_LOADED:-<none>}"
+echo "Results     : ${ABS_RESULT_DIR}   [${RESULT_SRC}]"
+echo "Staging     : ${ABS_TRANSFER_DIR}   [${TRANSFER_SRC}]"
+echo "=========================================="
 
 if [[ ! -d "$ABS_RESULT_DIR" ]]; then
   echo "ERROR: Analysis output directory not found: $ABS_RESULT_DIR" >&2

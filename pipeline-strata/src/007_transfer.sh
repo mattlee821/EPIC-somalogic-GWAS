@@ -35,9 +35,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PROJ_ROOT="${GWAS_PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}}"
 
-if [[ -f "${PROJ_ROOT}/.env" ]]; then
-  set -a; source "${PROJ_ROOT}/.env"; set +a
-fi
+# Shared .env loader (src/lib/env.sh): an exported variable always beats .env.
+_gwas_find_lib() {
+  local c
+  for c in "${SLURM_SUBMIT_DIR:-/nonexistent}/src/lib/env.sh" \
+           "${DEFAULT_PROJ_ROOT:-/nonexistent}/src/lib/env.sh" \
+           "${PROJ_ROOT:-/nonexistent}/src/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/../lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../lib/env.sh"; do
+    if [[ -f "$c" ]]; then printf '%s\n' "$c"; return 0; fi
+  done
+  return 1
+}
+_GWAS_ENV_LIB="$(_gwas_find_lib)" || {
+  echo "ERROR: src/lib/env.sh not found. The tree is incompletely synced;" >&2
+  echo "       rsync pipeline-strata/ again (see TRANSFER.md)." >&2
+  exit 1
+}
+# shellcheck disable=SC1090
+source "$_GWAS_ENV_LIB"
+
+load_env_file "${PROJ_ROOT}/.env" || true
 mkdir -p "${PROJ_ROOT}/src/logs"
 
 LOCAL_DIR="${GWAS_STAGING_DIR:-}"

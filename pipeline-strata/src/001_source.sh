@@ -42,19 +42,34 @@ else
 fi
 ENV_NAME="nf_master"
 
-source_env_file() {
-  local env_file="$1"
-  if [[ -f "$env_file" ]]; then
-    set -a
-    source "$env_file"
-    set +a
-  fi
+# Shared .env loader (src/lib/env.sh): an exported variable always beats .env.
+_gwas_find_lib() {
+  local c
+  for c in "${SLURM_SUBMIT_DIR:-/nonexistent}/src/lib/env.sh" \
+           "${DEFAULT_PROJ_ROOT:-/nonexistent}/src/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/../lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../lib/env.sh"; do
+    if [[ -f "$c" ]]; then printf '%s
+' "$c"; return 0; fi
+  done
+  return 1
 }
+_GWAS_ENV_LIB="$(_gwas_find_lib)" || {
+  echo "ERROR: src/lib/env.sh not found. The tree is incompletely synced;" >&2
+  echo "       rsync pipeline-strata/ again (see TRANSFER.md)." >&2
+  exit 1
+}
+# shellcheck disable=SC1090
+source "$_GWAS_ENV_LIB"
 
-source_env_file "${PWD}/.env"
-if [[ "$DEFAULT_PROJ_ROOT" != "$PWD" ]]; then
-  source_env_file "${DEFAULT_PROJ_ROOT}/.env"
-fi
+# First file found wins, as in 002/004. Previously the project-root .env was
+# sourced second and so overrode the PWD one, which is the opposite of what
+# searching PWD first is for.
+for env_file in "${PWD}/.env" "${DEFAULT_PROJ_ROOT}/.env"; do
+  load_env_file "$env_file" && break
+done
 
 # Resolve PROJ_ROOT only after .env is sourced, so GWAS_PROJECT_ROOT is honoured.
 PROJ_ROOT="${GWAS_PROJECT_ROOT:-$DEFAULT_PROJ_ROOT}"

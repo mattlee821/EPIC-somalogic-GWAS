@@ -56,8 +56,30 @@ fi
 # ---------------------------------------------------------------------------
 
 
+# Shared .env loader (src/lib/env.sh): an exported variable always beats .env.
+_gwas_find_lib() {
+  local c
+  for c in "${SLURM_SUBMIT_DIR:-/nonexistent}/src/lib/env.sh" \
+           "${DEFAULT_PROJ_ROOT:-/nonexistent}/src/lib/env.sh" \
+           "${PROJ_ROOT:-/nonexistent}/src/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/lib/env.sh" \
+           "${SCRIPT_DIR:-/nonexistent}/../lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/lib/env.sh" \
+           "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../lib/env.sh"; do
+    if [[ -f "$c" ]]; then printf '%s\n' "$c"; return 0; fi
+  done
+  return 1
+}
+_GWAS_ENV_LIB="$(_gwas_find_lib)" || {
+  echo "ERROR: src/lib/env.sh not found. The tree is incompletely synced;" >&2
+  echo "       rsync pipeline-strata/ again (see TRANSFER.md)." >&2
+  exit 1
+}
+# shellcheck disable=SC1090
+source "$_GWAS_ENV_LIB"
+
 for env_file in "${SLURM_SUBMIT_DIR:-/nonexistent}/.env" ".env" "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.env"; do
-  if [ -f "$env_file" ]; then set -a; source "$env_file"; set +a; break; fi
+  load_env_file "$env_file" && break
 done
 
 # Under SLURM the script runs from the spool dir (a copy), so BASH_SOURCE does not
