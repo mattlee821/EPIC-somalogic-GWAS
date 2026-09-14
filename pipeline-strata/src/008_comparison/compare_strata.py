@@ -295,18 +295,50 @@ def global_test(z: np.ndarray, label: str) -> dict:
     z = z[np.isfinite(z)]
     if z.size < 3:
         return {"set": label, "n": int(z.size), "mean_z": np.nan, "var_z": np.nan,
-                "ks_p": np.nan, "lambda": np.nan, "n_p_lt_05": 0, "frac_p_lt_05": np.nan}
+                "var_z_p": np.nan, "ks_p": np.nan, "lambda": np.nan,
+                "n_p_lt_05": 0, "frac_p_lt_05": np.nan}
     p = 2.0 * stats.norm.sf(np.abs(z))
+    v = float(np.var(z, ddof=1))
+    m = z.size
+    # Formal one-sided test of var(z) > 1. The null here is ANALYTIC, not
+    # estimated: disjoint samples give independent estimates, so var(z)=1
+    # exactly. (m-1)*var(z) is therefore chi-square on m-1 df under H0.
+    var_p = float(stats.chi2.sf((m - 1) * v, m - 1))
     return {
         "set": label,
-        "n": int(z.size),
+        "n": int(m),
         "mean_z": float(np.mean(z)),
-        "var_z": float(np.var(z, ddof=1)),
-        # Under H0 var(z)=1; >1 indicates real between-stratum heterogeneity.
+        "var_z": v,
+        "var_z_p": var_p,
         "ks_p": float(stats.kstest(z, "norm").pvalue),
         "lambda": float(np.median(z ** 2) / stats.chi2.ppf(0.5, 1)),
         "n_p_lt_05": int((p < 0.05).sum()),
         "frac_p_lt_05": float((p < 0.05).mean()),
+    }
+
+
+def variance_ratio_test(rows: list[dict], num: str, den: str) -> dict | None:
+    """F test: is one set's between-stratum heterogeneity greater than another's?
+
+    This is the sharpest form of the targeted hypothesis. Asking whether
+    smoking-locus pQTLs are modified at all (var > 1) conflates a real effect
+    with anything that inflates z generally; asking whether they are modified
+    MORE than a random slice of the proteome isolates what is specific to those
+    loci, because any shared technical inflation cancels in the ratio.
+    """
+    a = next((r for r in rows if r["set"] == num), None)
+    b = next((r for r in rows if r["set"] == den), None)
+    if not a or not b or a["n"] < 3 or b["n"] < 3:
+        return None
+    if not (np.isfinite(a["var_z"]) and np.isfinite(b["var_z"])) or b["var_z"] <= 0:
+        return None
+    F = a["var_z"] / b["var_z"]
+    return {
+        "numerator": num, "denominator": den,
+        "n_num": a["n"], "n_den": b["n"],
+        "var_num": a["var_z"], "var_den": b["var_z"],
+        "F": float(F),
+        "p": float(stats.f.sf(F, a["n"] - 1, b["n"] - 1)),
     }
 
 
@@ -613,26 +645,76 @@ def main() -> None:
         global_test(loci.loc[testable, "Z_DIFF"].values, "primary_targeted"),
         global_test(loci.loc[testable & cis_m, "Z_DIFF"].values, "primary_targeted_cis"),
         global_test(loci.loc[testable & trans_m, "Z_DIFF"].values, "primary_targeted_trans"),
-        global_test(loci.loc[ctrl, "Z_DIFF"].values, "primary_controls"),
-        global_test(loci.loc[ctrl & cis_m, "Z_DIFF"].values, "primary_controls_cis"),
-        global_test(loci.loc[ctrl & trans_m, "Z_DIFF"].values, "primary_controls_trans"),
+        global_test(loci.loc[ctrl, "Z_DIFF"].values, "primary_random_proteome"),
+        global_test(loci.loc[ctrl & cis_m, "Z_DIFF"].values, "primary_random_proteome_cis"),
+        global_test(loci.loc[ctrl & trans_m, "Z_DIFF"].values, "primary_random_proteome_trans"),
         global_test(loci.loc[secnd, "Z_DIFF"].values, "secondary_selection_biased"),
     ]
     gt = pd.DataFrame(rows)
     gt.to_csv(outdir / "global_test.tsv", sep="\t", index=False, na_rep="NA")
 
+    # Is the targeted set MORE heterogeneous than a random slice of the
+    # proteome? Any inflation common to both cancels in the ratio, so this
+    # isolates what is specific to the smoking loci.
+    ratios = [r for r in (
+        variance_ratio_test(rows, "primary_targeted", "primary_random_proteome"),
+        variance_ratio_test(rows, "primary_targeted_cis", "primary_random_proteome_cis"),
+        variance_ratio_test(rows, "primary_targeted_trans", "primary_random_proteome_trans"),
+    ) if r]
+    if ratios:
+        pd.DataFrame(ratios).to_csv(outdir / "variance_ratio.tsv", sep="\t",
+                                    index=False, na_rep="NA")
+
     plotted = make_plots(loci, outdir, a, b)
 
     # ---- report ----------------------------------------------------------
-    print(f"\n{'='*70}\nGLOBAL TEST -- is the z distribution heavier than N(0,1)?")
-    print(f"{'set':<28}{'n':>5}{'mean z':>9}{'var z':>8}{'KS p':>10}{'p<.05':>8}")
+    print(f"\n{'='*78}\nGLOBAL TESTS -- var(z) = 1 under the null (analytic, not estimated)")
+    print(f"{'set':<34}{'n':>5}{'mean z':>9}{'var z':>8}{'P(var>1)':>10}{'p<.05':>8}")
     for r in rows:
         if r["n"] == 0:
             continue
-        print(f"{r['set']:<28}{r['n']:>5}{r['mean_z']:>9.3f}{r['var_z']:>8.2f}"
-              f"{r['ks_p']:>10.3g}{r['frac_p_lt_05']:>8.2f}")
-    print("Under the null var(z) = 1. Values above 1 in the targeted set but not")
-    print("the controls indicate genuine between-stratum heterogeneity.")
+        print(f"{r['set']:<34}{r['n']:>5}{r['mean_z']:>9.3f}{r['var_z']:>8.2f}"
+              f"{r['var_z_p']:>10.3g}{r['frac_p_lt_05']:>8.2f}")
+
+    print(f"\n{'-'*78}\nTHE THREE QUESTIONS")
+    def get(lbl):
+        return next((r for r in rows if r["set"] == lbl and r["n"] >= 3), None)
+
+    def verdict(pv: float) -> str:
+        """Graded rather than binary. var(z) is a single test on a quantity with
+        a wide sampling distribution -- at n=290 a true null produces var(z)=1.16
+        about 3.5% of the time -- so a p just under 0.05 is weak evidence and
+        should not be reported as a finding."""
+        if not np.isfinite(pv):
+            return "not computable"
+        if pv < 0.001:
+            return "YES"
+        if pv < 0.05:
+            return "suggestive only"
+        return "no evidence"
+
+    rnd, tgt = get("primary_random_proteome"), get("primary_targeted")
+    if rnd:
+        print(f"  1. Do pQTLs differ by stratum GENERALLY?        {verdict(rnd['var_z_p'])}")
+        print(f"     random proteome: n={rnd['n']}, var(z)={rnd['var_z']:.2f}, P={rnd['var_z_p']:.3g}")
+    else:
+        print("  1. Do pQTLs differ GENERALLY?                   no random set "
+              "(pass --annot)")
+    if tgt:
+        print(f"  2. Do pQTLs at the TARGETED loci differ?        {verdict(tgt['var_z_p'])}")
+        print(f"     targeted: n={tgt['n']}, var(z)={tgt['var_z']:.2f}, P={tgt['var_z_p']:.3g}")
+    if ratios:
+        r0 = ratios[0]
+        print(f"  3. Do the TARGETED loci differ MORE than average?  {verdict(r0['p'])}")
+        print(f"     F = {r0['var_num']:.2f}/{r0['var_den']:.2f} = {r0['F']:.2f}"
+              f" on ({r0['n_num']-1},{r0['n_den']-1}) df, P={r0['p']:.3g}")
+    else:
+        print("  3. Targeted vs random ratio: not computable (need both sets)")
+
+    print("\n  Question 1 uses the random proteome as a DISCOVERY set, so it cannot")
+    print("  simultaneously serve as an empirical null. It is interpretable only")
+    print("  because the null is analytic and the QC gates below passed; a")
+    print("  permutation of stratum labels would be needed for an empirical one.")
 
     n_fail = int((~loci["QC_PASS"]).sum())
     print(f"\n{'='*70}\nPER-LOCUS")
