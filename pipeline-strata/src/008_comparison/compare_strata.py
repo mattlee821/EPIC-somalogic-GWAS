@@ -66,6 +66,10 @@ from scipy import stats
 
 REQUIRED = ["CHR", "POS", "ID", "EA", "OA", "EAF", "BETA", "SE", "P", "N"]
 
+# Decompression is the single largest cost. pigz parallelises it; fall back to
+# gzip, which is single-threaded.
+DECOMP = "pigz -dc" if shutil.which("pigz") else "gzip -cd"
+
 
 # --------------------------------------------------------------------------
 # helpers
@@ -83,84 +87,32 @@ def run(cmd: str, log: Path | None = None) -> subprocess.CompletedProcess:
     return res
 
 
-def build_assoc(meta: Path, out: Path, hla: str) -> None:
-    """Flatten the reference meta to a PLINK --clump input.
+def scan_sumstats(path: Path, workdir: Path, tag: str, p_max: float,
+                  ids: set[str] | None, hla: str) -> pd.DataFrame:
+    """ONE streaming pass, returning every row that is either below p_max OR at
+    one of `ids`.
 
-    SNP ids are chr:pos, matching the LD reference built by 004 and the
-    convention in bin/run_herit.sh. Duplicate positions keep the smallest P.
+    The old code read each file twice: once to build a PLINK --clump input and
+    again to pull the index variants out. Six full decompressions per protein
+    (3 files x 2) is 3.5 TB for batch1. A single pass cannot be done with a
+    p-filter alone -- an index variant chosen from the reference may be null in
+    a stratum, so it has to be fetched by ID -- hence the OR.
+
+    Returned rows carry the SNP key (chr:pos), so the caller can both clump and
+    extract from this one frame.
     """
     try:
         hc, ha, hb = hla.split(":")
     except ValueError:
         hc, ha, hb = "", "0", "0"
-    awk = r"""
-      BEGIN{FS=OFS="\t"}
-      NR==1 { for(i=1;i<=NF;i++) h[$i]=i; next }
-      {
-        chr=$(h["CHR"]); gsub(/^[Cc][Hh][Rr]/,"",chr); pos=$(h["POS"])
-        if (chr=="" || pos=="") next
-        if (chr==hc && pos+0>=ha+0 && pos+0<=hb+0) next
-        p=$(h["P"]); if (p=="" || p=="NA") next
-        snp=chr":"pos; p=p+0
-        if (!(snp in seenP) || p < seenP[snp]) { seenP[snp]=p; row[snp]=snp OFS chr OFS pos OFS p }
-      }
-      END{ print "SNP","CHR","POS","P"; for(s in row) print row[s] }
-    """
-    # The program goes to a file rather than inline: repr()-ing a multi-line awk
-    # script into a shell command turns its newlines into literal backslash-n.
-    prog = out.with_suffix(".awk")
-    prog.write_text(awk)
-    subprocess.run(
-        f"gzip -cd {str(meta)!r} | awk -v hc={hc!r} -v ha={ha!r} -v hb={hb!r} "
-        f"-f {str(prog)!r} > {str(out)!r}",
-        shell=True, check=True)
 
-
-def clump(assoc: Path, workdir: Path, ld_ref: str, p1: float, r2: float,
-          kb: int, log: Path) -> list[str]:
-    """Independent index SNPs (chr:pos). LD clumping, else distance pruning."""
-    if ld_ref and Path(f"{ld_ref}.bed").exists() and shutil.which("plink"):
-        out = workdir / "clumped"
-        res = run(
-            f"plink --bfile {ld_ref!r} --clump {str(assoc)!r} "
-            f"--clump-snp-field SNP --clump-field P "
-            f"--clump-p1 {p1} --clump-p2 {p1} --clump-r2 {r2} --clump-kb {kb} "
-            f"--out {str(out)!r}", log)
-        clumped = Path(f"{out}.clumped")
-        if clumped.exists():
-            idx = [ln.split()[2] for ln in clumped.read_text().splitlines()[1:]
-                   if ln.strip()]
-            return [s for s in idx if s]
-        with log.open("a") as fh:
-            fh.write(f"plink --clump produced no output (rc={res.returncode})\n")
-        return []
-
-    # Distance-based greedy pruning: strongest first, keep if no kept index
-    # within +/- kb on the same chromosome.
-    df = pd.read_csv(assoc, sep="\t")
-    df = df[df["P"] <= p1].sort_values("P")
-    kept: list[tuple[str, int]] = []
-    out_ids: list[str] = []
-    window = kb * 1000
-    for snp, chrom, pos in zip(df["SNP"], df["CHR"].astype(str), df["POS"].astype(int)):
-        if any(c == chrom and abs(pos - p) <= window for c, p in kept):
-            continue
-        kept.append((chrom, pos))
-        out_ids.append(snp)
-    return out_ids
-
-
-def extract_snps(path: Path, snp_ids: set[str], workdir: Path, tag: str) -> pd.DataFrame:
-    """Pull just the index variants out of an 11M-row sumstats file.
-
-    Filtering with awk keeps this to one streaming pass per file; reading the
-    whole table into pandas for a few hundred rows would dominate the runtime.
-    """
-    if not snp_ids:
-        return pd.DataFrame(columns=REQUIRED + ["SNP"])
+    # The NR==FNR idiom below distinguishes the id file from the sumstats by
+    # record count. An EMPTY id file contributes no records, so the sumstats
+    # header would satisfy NR==FNR, be swallowed as an id, and leave the column
+    # map empty. Always write a sentinel that cannot collide with a chr:pos key.
     ids_file = workdir / f"ids_{tag}.txt"
-    ids_file.write_text("\n".join(sorted(snp_ids)) + "\n")
-    out = workdir / f"hit_{tag}.tsv"
+    ids_file.write_text("\n".join(sorted(ids) if ids else ["__NO_IDS__"]) + "\n")
+
     awk = r"""
       BEGIN{FS=OFS="\t"}
       NR==FNR { want[$1]; next }
@@ -168,23 +120,76 @@ def extract_snps(path: Path, snp_ids: set[str], workdir: Path, tag: str) -> pd.D
                 print "SNP","CHR","POS","ID","EA","OA","EAF","BETA","SE","P","N","HET_ISQ"; next }
       {
         chr=$(h["CHR"]); gsub(/^[Cc][Hh][Rr]/,"",chr); pos=$(h["POS"])
+        if (chr=="" || pos=="") next
+        if (chr==hc && pos+0>=ha+0 && pos+0<=hb+0) next
+        p=$(h["P"]); if (p=="" || p=="NA") next
         snp=chr":"pos
-        if (!(snp in want)) next
+        if (!((snp in want) || (p+0 < pmax))) next
         iq = (("HET_ISQ" in h) ? $(h["HET_ISQ"]) : "NA")
         print snp, chr, pos, $(h["ID"]), $(h["EA"]), $(h["OA"]), $(h["EAF"]),
-              $(h["BETA"]), $(h["SE"]), $(h["P"]), $(h["N"]), iq
+              $(h["BETA"]), $(h["SE"]), p, $(h["N"]), iq
       }
     """
-    prog = workdir / f"extract_{tag}.awk"
+    prog = workdir / f"scan_{tag}.awk"
     prog.write_text(awk)
+    out = workdir / f"scan_{tag}.tsv"
     subprocess.run(
-        f"gzip -cd {str(path)!r} | awk -f {str(prog)!r} {str(ids_file)!r} - > {str(out)!r}",
+        f"{DECOMP} {str(path)!r} | awk -v hc={hc!r} -v ha={ha!r} -v hb={hb!r} "
+        f"-v pmax={p_max:g} -f {str(prog)!r} {str(ids_file)!r} - > {str(out)!r}",
         shell=True, check=True)
+
     df = pd.read_csv(out, sep="\t", dtype={"SNP": str, "CHR": str, "EA": str, "OA": str})
-    # A position can appear more than once (multi-allelic); keep the strongest.
     if not df.empty:
+        # A position can appear more than once (multi-allelic); keep the strongest.
         df = df.sort_values("P").drop_duplicates("SNP", keep="first")
     return df
+
+
+def clump_frame(df: pd.DataFrame, workdir: Path, tag: str, ld_ref: str,
+                p1: float, r2: float, kb: int, log: Path) -> list[str]:
+    """Independent index SNPs from an already-filtered frame.
+
+    The frame passed here holds only variants below the threshold -- typically
+    a few hundred rows rather than 11M -- so PLINK's parse cost is negligible
+    and only the LD-reference load remains.
+    """
+    sig = df[pd.to_numeric(df["P"], errors="coerce") < p1]
+    if sig.empty:
+        return []
+
+    if ld_ref and Path(f"{ld_ref}.bed").exists() and shutil.which("plink"):
+        assoc = workdir / f"assoc_{tag}.tsv"
+        sig[["SNP", "CHR", "POS", "P"]].to_csv(assoc, sep="\t", index=False)
+        out = workdir / f"clumped_{tag}"
+        res = run(f"plink --bfile {ld_ref!r} --clump {str(assoc)!r} "
+                  f"--clump-snp-field SNP --clump-field P "
+                  f"--clump-p1 {p1} --clump-p2 {p1} --clump-r2 {r2} --clump-kb {kb} "
+                  f"--out {str(out)!r}", log)
+        clumped = Path(f"{out}.clumped")
+        if clumped.exists():
+            idx = [ln.split()[2] for ln in clumped.read_text().splitlines()[1:] if ln.strip()]
+            return [x for x in idx if x]
+        with log.open("a") as fh:
+            fh.write(f"plink --clump gave no output for {tag} (rc={res.returncode})\n")
+        return []
+
+    return distance_prune(sig, kb)
+
+
+def distance_prune(sig: pd.DataFrame, kb: int) -> list[str]:
+    """Greedy: strongest first, keep if no kept index within +/-kb on the chromosome."""
+    d = sig.copy()
+    d["P"] = pd.to_numeric(d["P"], errors="coerce")
+    d = d.dropna(subset=["P"]).sort_values("P")
+    kept: list[tuple[str, int]] = []
+    out: list[str] = []
+    w = kb * 1000
+    for snp, chrom, pos in zip(d["SNP"], d["CHR"].astype(str), d["POS"].astype(int)):
+        if any(c == chrom and abs(pos - p) <= w for c, p in kept):
+            continue
+        kept.append((chrom, pos))
+        out.append(snp)
+    return out
 
 
 def harmonise(ref: pd.DataFrame, alt: pd.DataFrame, suffix: str) -> pd.DataFrame:
@@ -367,6 +372,103 @@ def make_plots(loci: pd.DataFrame, outdir: Path, a: str, b: str) -> bool:
     return True
 
 
+def process_protein(protein: str, cfg: dict) -> dict:
+    """All work for one protein. Top-level so multiprocessing can pickle it.
+
+    Three streaming passes, one per file, down from six: the reference pass
+    yields both the clump input and the reference rows, and each stratum pass
+    yields both the index-variant rows and that stratum's own significant
+    variants for the secondary tier.
+    """
+    a, b, ref = cfg["a"], cfg["b"], cfg["ref"]
+    pdir = cfg["staged"] / protein
+    files = {g: pdir / f"{g}.tsv.gz" for g in (a, b, ref)}
+
+    missing = [g for g, f in files.items() if not f.exists()]
+    if missing:
+        return {"protein": protein, "loci": None, "skip": f"missing {','.join(missing)}", "msg": ""}
+    for g, f in files.items():
+        absent = [c for c in REQUIRED if c not in read_header(f)]
+        if absent:
+            return {"protein": protein, "loci": None,
+                    "skip": f"{g} lacks {','.join(absent)}", "msg": ""}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+
+        # Pass 1 -- reference. Everything below the threshold; the index set is
+        # necessarily a subset, so no second read is needed.
+        dref_all = scan_sumstats(files[ref], work, "ref", cfg["p_discovery"], None, cfg["hla"])
+        index = clump_frame(dref_all, work, "ref", cfg["ld_ref"], cfg["p_discovery"],
+                            cfg["clump_r2"], cfg["clump_kb"], cfg["log"])
+        ids = set(index)
+
+        # Passes 2 and 3 -- strata. Each returns rows AT the index variants
+        # (needed whatever their p-value there) and rows significant in that
+        # stratum (the secondary tier), in a single read.
+        dstrata = {g: scan_sumstats(files[g], work, g, cfg["p_discovery"], ids, cfg["hla"])
+                   for g in (a, b)}
+
+        # Secondary tier: significant within a stratum but not in the reference.
+        # Distance-pruned rather than LD-clumped -- it is exploratory, and a
+        # PLINK call per stratum would triple the LD-reference loads.
+        sec: list[str] = []
+        for g in (a, b):
+            d = dstrata[g]
+            sig = d[pd.to_numeric(d["P"], errors="coerce") < cfg["p_discovery"]]
+            sec += distance_prune(sig, cfg["clump_kb"])
+        sec_only = sorted(set(sec) - ids)
+
+        tiers = {s: "primary" for s in index}
+        tiers.update({s: "secondary" for s in sec_only})
+        if not tiers:
+            return {"protein": protein, "loci": None,
+                    "skip": "no variant reached the threshold", "msg": ""}
+
+        want = set(tiers)
+        # Secondary variants are absent from the reference frame when they sit
+        # above its threshold, and from the other stratum's frame; fetch those
+        # few by ID. Only happens when a secondary tier exists.
+        need_ref = want - set(dref_all["SNP"])
+        if need_ref:
+            extra = scan_sumstats(files[ref], work, "ref2", 0.0, need_ref, cfg["hla"])
+            dref_all = pd.concat([dref_all, extra], ignore_index=True)
+        for g in (a, b):
+            need = want - set(dstrata[g]["SNP"])
+            if need:
+                extra = scan_sumstats(files[g], work, f"{g}2", 0.0, need, cfg["hla"])
+                dstrata[g] = pd.concat([dstrata[g], extra], ignore_index=True)
+
+        dref = dref_all[dref_all["SNP"].isin(want)]
+        if dref.empty:
+            return {"protein": protein, "loci": None,
+                    "skip": "index variants absent from the reference", "msg": ""}
+
+        da = harmonise(dref, dstrata[a][dstrata[a]["SNP"].isin(want)], f"_{a}")
+        db = harmonise(dref, dstrata[b][dstrata[b]["SNP"].isin(want)], f"_{b}")
+
+        base = dref.rename(columns={c: f"{c}_{ref}" for c in
+                                    ("BETA", "SE", "P", "N", "EAF", "HET_ISQ", "ID")})
+        m = base.merge(da, on="SNP", how="inner").merge(db, on="SNP", how="inner")
+        if m.empty:
+            return {"protein": protein, "loci": None,
+                    "skip": "no variant aligned across all three files", "msg": ""}
+
+        m = compare_pair(m, a, b)
+        m = qc_flags(m, a, b, cfg["max_het_isq"], cfg["max_eaf_diff"])
+        m = annotate_cis(m, protein, cfg["gene_map"], cfg["cis_window_kb"])
+        m.insert(0, "PROTEIN", protein)
+        m["TIER"] = m["SNP"].map(tiers)
+        m["CONTROL"] = protein in cfg["controls"]
+
+        n_pri = int((m["TIER"] == "primary").sum())
+        n_cis = int((m["CIS"] == "cis").sum())
+        msg = (f"  {protein:<12} {n_pri:>4} primary, {len(m)-n_pri:>3} secondary"
+               f"  ({n_cis} cis, {int((m['CIS']=='trans').sum())} trans)")
+        return {"protein": protein, "loci": m, "skip": None, "msg": msg}
+
+
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
@@ -391,6 +493,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-het-isq", type=float, default=75.0)
     ap.add_argument("--max-eaf-diff", type=float, default=0.05)
     ap.add_argument("--proteins", default="", help="comma-separated subset")
+    ap.add_argument("--jobs", "-j", type=int, default=max(1, (os.cpu_count() or 2) - 1),
+                    help="parallel workers; proteins are independent")
     return ap.parse_args()
 
 
@@ -426,75 +530,29 @@ def main() -> None:
     print(f"Comparing '{a}' vs '{b}', discovery from '{ref}' at P < {args.p_discovery:g}")
     print(f"{len(proteins)} protein(s); {len(controls)} flagged as controls\n")
 
-    all_loci: list[pd.DataFrame] = []
-    skipped: list[tuple[str, str]] = []
+    cfg = dict(a=a, b=b, ref=ref, staged=staged, log=log, gene_map=gene_map,
+               controls=controls,
+               p_discovery=args.p_discovery, ld_ref=args.ld_ref,
+               clump_r2=args.clump_r2, clump_kb=args.clump_kb, hla=args.hla,
+               cis_window_kb=args.cis_window_kb,
+               max_het_isq=args.max_het_isq, max_eaf_diff=args.max_eaf_diff)
 
-    for protein in proteins:
-        pdir = staged / protein
-        files = {g: pdir / f"{g}.tsv.gz" for g in (a, b, ref)}
-        missing = [g for g, f in files.items() if not f.exists()]
-        if missing:
-            skipped.append((protein, f"missing {','.join(missing)}"))
-            continue
+    if args.jobs == 1:
+        results = [process_protein(prot, cfg) for prot in proteins]
+    else:
+        # Proteins are independent, and the work is dominated by decompressing
+        # one file per stratum, so this scales close to linearly until the
+        # filesystem saturates.
+        import multiprocessing as mp
+        with mp.get_context("spawn").Pool(args.jobs) as pool:
+            results = pool.starmap(process_protein, [(prot, cfg) for prot in proteins],
+                                   chunksize=1)
 
-        for g, f in files.items():
-            hdr = read_header(f)
-            absent = [c for c in REQUIRED if c not in hdr]
-            if absent:
-                skipped.append((protein, f"{g} lacks {','.join(absent)}"))
-                break
-        else:
-            with tempfile.TemporaryDirectory() as tmp:
-                work = Path(tmp)
-                assoc = work / "assoc.tsv"
-                build_assoc(files[ref], assoc, args.hla)
-
-                index = clump(assoc, work, args.ld_ref, args.p_discovery,
-                              args.clump_r2, args.clump_kb, log)
-
-                # SECONDARY tier: significant in a stratum but not in the
-                # reference. Selection-biased by construction, so carried
-                # separately and never reported as a test.
-                sec_index: list[str] = []
-                for g in (a, b):
-                    sassoc = work / f"assoc_{g}.tsv"
-                    build_assoc(files[g], sassoc, args.hla)
-                    sec_index += clump(sassoc, work, args.ld_ref, args.p_discovery,
-                                       args.clump_r2, args.clump_kb, log)
-                sec_only = sorted(set(sec_index) - set(index))
-
-                tiers = {s: "primary" for s in index}
-                tiers.update({s: "secondary" for s in sec_only})
-                if not tiers:
-                    skipped.append((protein, "no variant reached the threshold"))
-                    continue
-
-                ids = set(tiers)
-                dref = extract_snps(files[ref], ids, work, "ref")
-                if dref.empty:
-                    skipped.append((protein, "index variants absent from the reference"))
-                    continue
-                da = harmonise(dref, extract_snps(files[a], ids, work, a), f"_{a}")
-                db = harmonise(dref, extract_snps(files[b], ids, work, b), f"_{b}")
-
-                base = dref.rename(columns={c: f"{c}_{ref}" for c in
-                                            ("BETA", "SE", "P", "N", "EAF", "HET_ISQ", "ID")})
-                m = base.merge(da, on="SNP", how="inner").merge(db, on="SNP", how="inner")
-                if m.empty:
-                    skipped.append((protein, "no variant aligned across all three files"))
-                    continue
-
-                m = compare_pair(m, a, b)
-                m = qc_flags(m, a, b, args.max_het_isq, args.max_eaf_diff)
-                m = annotate_cis(m, protein, gene_map, args.cis_window_kb)
-                m.insert(0, "PROTEIN", protein)
-                m["TIER"] = m["SNP"].map(tiers)
-                m["CONTROL"] = protein in controls
-                all_loci.append(m)
-
-                n_pri = int((m["TIER"] == "primary").sum())
-                print(f"  {protein:<12} {n_pri:>4} primary, "
-                      f"{len(m) - n_pri:>3} secondary index variant(s)")
+    all_loci = [r["loci"] for r in results if r["loci"] is not None]
+    skipped = [(r["protein"], r["skip"]) for r in results if r["skip"]]
+    for r in results:
+        if r["msg"]:
+            print(r["msg"])
 
     if not all_loci:
         for p, why in skipped:
@@ -507,9 +565,19 @@ def main() -> None:
     # those are the actual hypothesis tests.
     testable = loci["QC_PASS"] & (loci["TIER"] == "primary") & (~loci["CONTROL"])
     n_tests = int(testable.sum())
-    loci["P_DIFF_BONF"] = np.where(testable,
-                                   np.minimum(loci["P_DIFF"] * max(n_tests, 1), 1.0),
-                                   np.nan)
+    # Correct within cis and within trans, matching how they are reported. A
+    # single pooled denominator would penalise a cis finding for the number of
+    # trans tests, which answer a different question.
+    loci["P_DIFF_BONF"] = np.nan
+    for grp in ("cis", "trans", "NA"):
+        sel = testable & (loci["CIS"] == grp)
+        k = int(sel.sum())
+        if k:
+            loci.loc[sel, "P_DIFF_BONF"] = np.minimum(loci.loc[sel, "P_DIFF"] * k, 1.0)
+    loci["N_TESTS_IN_GROUP"] = np.where(
+        testable, loci["CIS"].map(
+            {g: int((testable & (loci["CIS"] == g)).sum()) for g in loci["CIS"].unique()}
+        ), np.nan)
     loci["SIGNIF_DIFF"] = loci["P_DIFF_BONF"] < 0.05
 
     loci = loci.sort_values(["PROTEIN", "P_DIFF"])
@@ -517,7 +585,7 @@ def main() -> None:
     front = ["PROTEIN", "SNP", "CHR", "POS", "EA", "OA", "GENE", "CIS",
              "TIER", "CONTROL"]
     stats_cols = ["DELTA", "SE_DELTA", "Z_DIFF", "P_DIFF", "P_DIFF_BONF",
-                  "SIGNIF_DIFF", "SAME_DIRECTION", "Q", "I2"]
+                  "N_TESTS_IN_GROUP", "SIGNIF_DIFF", "SAME_DIRECTION", "Q", "I2"]
     per_group = [f"{m}_{g}" for g in (a, b, ref)
                  for m in ("BETA", "SE", "P", "N", "EAF", "HET_ISQ")]
     qc = ["EAF_DIFF", "MAX_HET_ISQ", "QC_EAF", "QC_HET", "QC_PASS"]
@@ -528,12 +596,27 @@ def main() -> None:
     loci.to_csv(outdir / "pqtl_comparison.tsv", sep="\t", index=False, na_rep="NA")
 
     # Global tests: the primary question, and the control set as empirical null.
+    # cis and trans are reported separately, not pooled. They are different
+    # biology -- cis acts near the gene and is largely context-independent,
+    # whereas trans acts through regulatory intermediates and is where an
+    # exposure could plausibly intervene -- and they have very different power,
+    # since cis effects are several times larger. Pooling averages any
+    # trans-specific signal away. Calibration is unaffected: var(z)=1 under the
+    # null regardless of effect size, so each stratum of the table has the same
+    # reference point.
+    cis_m   = loci["CIS"] == "cis"
+    trans_m = loci["CIS"] == "trans"
+    ctrl    = loci["QC_PASS"] & loci["CONTROL"]
+    secnd   = loci["QC_PASS"] & (loci["TIER"] == "secondary")
+
     rows = [
         global_test(loci.loc[testable, "Z_DIFF"].values, "primary_targeted"),
-        global_test(loci.loc[loci["QC_PASS"] & loci["CONTROL"], "Z_DIFF"].values,
-                    "primary_controls"),
-        global_test(loci.loc[loci["QC_PASS"] & (loci["TIER"] == "secondary"), "Z_DIFF"].values,
-                    "secondary_selection_biased"),
+        global_test(loci.loc[testable & cis_m, "Z_DIFF"].values, "primary_targeted_cis"),
+        global_test(loci.loc[testable & trans_m, "Z_DIFF"].values, "primary_targeted_trans"),
+        global_test(loci.loc[ctrl, "Z_DIFF"].values, "primary_controls"),
+        global_test(loci.loc[ctrl & cis_m, "Z_DIFF"].values, "primary_controls_cis"),
+        global_test(loci.loc[ctrl & trans_m, "Z_DIFF"].values, "primary_controls_trans"),
+        global_test(loci.loc[secnd, "Z_DIFF"].values, "secondary_selection_biased"),
     ]
     gt = pd.DataFrame(rows)
     gt.to_csv(outdir / "global_test.tsv", sep="\t", index=False, na_rep="NA")
@@ -557,7 +640,8 @@ def main() -> None:
     print(f"  primary / secondary       : {int((loci['TIER']=='primary').sum())}"
           f" / {int((loci['TIER']=='secondary').sum())}")
     print(f"  failed QC (EAF or I2)     : {n_fail}")
-    print(f"  hypothesis tests          : {n_tests}")
+    print(f"  hypothesis tests          : {n_tests}"
+          f"  (cis {int((testable & cis_m).sum())}, trans {int((testable & trans_m).sum())})")
     hits = loci[loci["SIGNIF_DIFF"].fillna(False)]
     print(f"  Bonferroni-significant    : {len(hits)}")
     if not hits.empty:
