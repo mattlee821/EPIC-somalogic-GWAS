@@ -146,7 +146,8 @@ def scan_sumstats(path: Path, workdir: Path, tag: str, p_max: float,
 
 
 def clump_frame(df: pd.DataFrame, workdir: Path, tag: str, ld_ref: str,
-                p1: float, r2: float, kb: int, log: Path) -> list[str]:
+                p1: float, r2: float, kb: int, log: Path,
+                plink_mb: int = 2000) -> list[str]:
     """Independent index SNPs from an already-filtered frame.
 
     The frame passed here holds only variants below the threshold -- typically
@@ -161,9 +162,12 @@ def clump_frame(df: pd.DataFrame, workdir: Path, tag: str, ld_ref: str,
         assoc = workdir / f"assoc_{tag}.tsv"
         sig[["SNP", "CHR", "POS", "P"]].to_csv(assoc, sep="\t", index=False)
         out = workdir / f"clumped_{tag}"
+        # --threads/--memory are not optional here: workers run concurrently and
+        # PLINK's defaults are "all cores" and "half of system RAM" each.
         res = run(f"plink --bfile {ld_ref!r} --clump {str(assoc)!r} "
                   f"--clump-snp-field SNP --clump-field P "
                   f"--clump-p1 {p1} --clump-p2 {p1} --clump-r2 {r2} --clump-kb {kb} "
+                  f"--threads 1 --memory {plink_mb} "
                   f"--out {str(out)!r}", log)
         clumped = Path(f"{out}.clumped")
         if clumped.exists():
@@ -432,7 +436,8 @@ def process_protein(protein: str, cfg: dict) -> dict:
         # necessarily a subset, so no second read is needed.
         dref_all = scan_sumstats(files[ref], work, "ref", cfg["p_discovery"], None, cfg["hla"])
         index = clump_frame(dref_all, work, "ref", cfg["ld_ref"], cfg["p_discovery"],
-                            cfg["clump_r2"], cfg["clump_kb"], cfg["log"])
+                            cfg["clump_r2"], cfg["clump_kb"], cfg["log"],
+                            cfg["plink_mb"])
         ids = set(index)
 
         # Passes 2 and 3 -- strata. Each returns rows AT the index variants
@@ -504,6 +509,35 @@ def process_protein(protein: str, cfg: dict) -> dict:
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
+def default_jobs() -> int:
+    """Workers default to the ALLOCATION, not the node.
+
+    os.cpu_count() reports the machine's cores even inside a 2-CPU cgroup, so
+    under sbatch the old default (cpu_count-1) asked for tens of workers that
+    Slurm then squeezed onto the allocated CPUs.
+    """
+    n = os.environ.get("SLURM_CPUS_PER_TASK")
+    if n and n.isdigit() and int(n) > 0:
+        return int(n)
+    return max(1, (os.cpu_count() or 2) - 1)
+
+
+def plink_memory_mb(requested: int, jobs: int) -> int:
+    """MB to hand PLINK per worker.
+
+    PLINK1.9 with no --memory claims half of TOTAL system RAM. Sixteen of those
+    inside one 16G cgroup is an OOM, so the budget is always stated explicitly.
+    """
+    if requested > 0:
+        return requested
+    for var in ("SLURM_MEM_PER_NODE", "SLURM_MEM_PER_CPU"):
+        v = os.environ.get(var, "")
+        if v.isdigit() and int(v) > 0:
+            total = int(v) * (default_jobs() if var == "SLURM_MEM_PER_CPU" else 1)
+            return max(256, int(total * 0.8) // max(1, jobs))
+    return 2000
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -525,8 +559,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-het-isq", type=float, default=75.0)
     ap.add_argument("--max-eaf-diff", type=float, default=0.05)
     ap.add_argument("--proteins", default="", help="comma-separated subset")
-    ap.add_argument("--jobs", "-j", type=int, default=max(1, (os.cpu_count() or 2) - 1),
-                    help="parallel workers; proteins are independent")
+    ap.add_argument("--jobs", "-j", type=int, default=default_jobs(),
+                    help="parallel workers; proteins are independent. Defaults to "
+                         "SLURM_CPUS_PER_TASK under sbatch, else cpu_count-1.")
+    ap.add_argument("--plink-memory", type=int, default=0,
+                    help="MB per PLINK call. 0 = derive from the SLURM memory "
+                         "allocation divided by --jobs, else 2000.")
     return ap.parse_args()
 
 
@@ -560,14 +598,17 @@ def main() -> None:
         sys.exit(f"ERROR: no protein directories under {staged}")
 
     print(f"Comparing '{a}' vs '{b}', discovery from '{ref}' at P < {args.p_discovery:g}")
-    print(f"{len(proteins)} protein(s); {len(controls)} flagged as controls\n")
+    plink_mb = plink_memory_mb(args.plink_memory, args.jobs)
+    print(f"{len(proteins)} protein(s); {len(controls)} flagged as controls")
+    print(f"workers: {args.jobs}   PLINK: 1 thread, {plink_mb} MB each\n")
 
     cfg = dict(a=a, b=b, ref=ref, staged=staged, log=log, gene_map=gene_map,
                controls=controls,
                p_discovery=args.p_discovery, ld_ref=args.ld_ref,
                clump_r2=args.clump_r2, clump_kb=args.clump_kb, hla=args.hla,
                cis_window_kb=args.cis_window_kb,
-               max_het_isq=args.max_het_isq, max_eaf_diff=args.max_eaf_diff)
+               max_het_isq=args.max_het_isq, max_eaf_diff=args.max_eaf_diff,
+               plink_mb=plink_mb)
 
     if args.jobs == 1:
         results = [process_protein(prot, cfg) for prot in proteins]

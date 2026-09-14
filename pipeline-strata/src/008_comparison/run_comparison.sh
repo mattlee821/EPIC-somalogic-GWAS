@@ -3,8 +3,8 @@
 #SBATCH --output=src/logs/008_comparison.log
 #SBATCH --error=src/logs/008_comparison.err
 #SBATCH --time=8:00:00
-#SBATCH --mem=16G
-#SBATCH --cpus-per-task=2
+#SBATCH --mem=32G
+#SBATCH --cpus-per-task=16
 #SBATCH --partition=high_p
 #SBATCH --open-mode=truncate
 
@@ -118,6 +118,9 @@ echo "Strata:     $STRATA   (reference: $REFERENCE, P < $PDISC)"
 echo "LD ref:     ${LD_REF:-<none, distance-based pruning>}"
 echo "Gene map:   ${GENE_MAP:-<none, no cis/trans>}"
 echo "Annotation: ${ANNOT:-<none, no control set>}"
+# compare_strata.py defaults --jobs to SLURM_CPUS_PER_TASK, so the pool always
+# matches the allocation above and there is no -j to keep in sync by hand.
+echo "CPUs:       ${SLURM_CPUS_PER_TASK:-<not under slurm>}"
 echo
 
 if command -v conda >/dev/null 2>&1; then
