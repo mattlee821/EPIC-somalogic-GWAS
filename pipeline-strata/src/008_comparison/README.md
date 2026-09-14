@@ -122,3 +122,31 @@ Checked against synthetic data with known truth:
   **var z=1.00**, KS p=0.84, exactly 5% below p<0.05, zero false positives.
 - Both fixtures allele-flip 30% of `never` variants. Broken harmonisation
   inflates `var(z)` dramatically, so these numbers also validate that step.
+
+## Running it on the whole cluster
+
+`run_comparison.sh` runs a multiprocessing pool, which is capped at one node's
+cores. For a full panel use the array submitter instead, from the login node:
+
+```bash
+bash src/008_comparison/submit_comparison.sh \
+  --annot /data/.../phenotype-strata/smoking-panel.annot.tsv
+```
+
+It submits two jobs:
+
+| phase | shape | why |
+|---|---|---|
+| map | `--array=0-N`, 1 cpu each | proteins are independent; wall time is the slowest protein, not the sum |
+| gather | one job, `afterok` on the array | Bonferroni denominators and the var(z)/F tests need every protein in one frame |
+
+Each map task writes `<out>/shards/part_NNNNN.pkl`; the gather job combines them
+and writes the final tables. Shards are assigned by STRIDE (`proteins[k::n]`),
+not contiguous blocks, because proteins differ several-fold in how many variants
+clear the threshold and striding spreads the heavy ones across tasks.
+
+`--gather` refuses to run if any shard is missing. A silently absent shard drops
+proteins from the global tests, and nothing downstream could detect it.
+
+Useful flags: `--per-task N` (proteins per task, default 1), `--throttle N` (cap
+concurrent tasks), `--dry-run`.

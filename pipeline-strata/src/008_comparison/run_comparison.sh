@@ -70,6 +70,12 @@ while [[ $# -gt 0 ]]; do
     --reference) REFERENCE="$2"; shift 2 ;;
     --p-discovery) PDISC="$2"; shift 2 ;;
     --annot) ANNOT="$2"; shift 2 ;;
+    # Set by submit_comparison.sh. The array index is only known inside the
+    # task, so the shard number cannot be baked into the submitted command.
+    --shard-from-array)
+      [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || {
+        echo "ERROR: --shard-from-array outside a SLURM array job" >&2; exit 1; }
+      EXTRA+=(--shard "${SLURM_ARRAY_TASK_ID}"); shift ;;
     -h|--help) sed -n '10,20p' "${BASH_SOURCE[0]:-$0}"; exit 0 ;;
     *) EXTRA+=("$1"); shift ;;
   esac

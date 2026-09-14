@@ -562,6 +562,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--jobs", "-j", type=int, default=default_jobs(),
                     help="parallel workers; proteins are independent. Defaults to "
                          "SLURM_CPUS_PER_TASK under sbatch, else cpu_count-1.")
+    ap.add_argument("--shard", type=int, default=-1,
+                    help="map phase: handle only proteins[shard::n_shards] and "
+                         "write a pickle for --gather. -1 = run everything here.")
+    ap.add_argument("--n-shards", type=int, default=1,
+                    help="total shards in the array (see --shard)")
+    ap.add_argument("--gather", action="store_true",
+                    help="reduce phase: combine <out>/shards/*.pkl, run the "
+                         "global tests, and write the final tables")
     ap.add_argument("--plink-memory", type=int, default=0,
                     help="MB per PLINK call. 0 = derive from the SLURM memory "
                          "allocation divided by --jobs, else 2000.")
@@ -579,7 +587,37 @@ def main() -> None:
     staged = Path(args.staged)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
-    log = outdir / "comparison.log"
+    # One log per shard. Array tasks all share outdir, so a single
+    # comparison.log would be truncated by whichever task started last and
+    # interleaved by the rest.
+    log = outdir / ("comparison.log" if args.shard < 0
+                    else f"shards/comparison_{args.shard:05d}.log")
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.gather:
+        shard_dir = outdir / "shards"
+        parts = sorted(shard_dir.glob("part_*.pkl"))
+        if not parts:
+            sys.exit(f"ERROR: no shard files under {shard_dir}. Did the array run?")
+        # Every shard must be present: a missing one silently drops proteins
+        # from the global tests, which is exactly the kind of quiet loss the
+        # variance tests cannot detect.
+        seen = {int(f.stem.split("_")[1]) for f in parts}
+        missing = sorted(set(range(args.n_shards)) - seen) if args.n_shards > 1 else []
+        if missing:
+            sys.exit(f"ERROR: {len(missing)} of {args.n_shards} shards missing: "
+                     f"{missing[:20]}{' ...' if len(missing) > 20 else ''}\n"
+                     f"       Re-run those array indices before gathering.")
+        all_loci, skipped = [], []
+        for f in parts:
+            d = pd.read_pickle(f)
+            all_loci.extend(d["loci"])
+            skipped.extend(d["skipped"])
+        print(f"Gathered {len(parts)} shard(s): {len(all_loci)} protein(s) with "
+              f"loci, {len(skipped)} skipped\n")
+        reduce_and_report(all_loci, skipped, args, a, b, ref, outdir)
+        return
+
     log.write_text("")
 
     gene_map = None
@@ -596,6 +634,25 @@ def main() -> None:
                       if d.is_dir() and (not wanted or d.name in wanted))
     if not proteins:
         sys.exit(f"ERROR: no protein directories under {staged}")
+
+    if args.shard >= 0:
+        if not 0 <= args.shard < args.n_shards:
+            sys.exit(f"ERROR: --shard {args.shard} outside 0..{args.n_shards-1}")
+        # Stride, not contiguous blocks: proteins vary several-fold in how many
+        # variants pass the threshold, and striding spreads the heavy ones
+        # across tasks instead of piling them into one.
+        total = len(proteins)
+        proteins = proteins[args.shard::args.n_shards]
+        print(f"Shard {args.shard+1}/{args.n_shards}: {len(proteins)} of {total} proteins")
+        if not proteins:
+            # Still write the (empty) part: --gather treats a missing shard as
+            # an error, and it cannot tell "had no work" from "died".
+            shard_dir = outdir / "shards"
+            shard_dir.mkdir(parents=True, exist_ok=True)
+            pd.to_pickle({"loci": [], "skipped": []},
+                         shard_dir / f"part_{args.shard:05d}.pkl")
+            print("nothing to do for this shard")
+            return
 
     print(f"Comparing '{a}' vs '{b}', discovery from '{ref}' at P < {args.p_discovery:g}")
     plink_mb = plink_memory_mb(args.plink_memory, args.jobs)
@@ -627,6 +684,36 @@ def main() -> None:
         if r["msg"]:
             print(r["msg"])
 
+    all_loci = [r["loci"] for r in results if r["loci"] is not None]
+    skipped = [(r["protein"], r["skip"]) for r in results if r["skip"]]
+    for r in results:
+        if r["msg"]:
+            print(r["msg"])
+
+    if args.shard >= 0:
+        # Map phase: hand the raw frames to the gather job and stop. Pickle,
+        # not TSV, because the booleans and the NaN-bearing float columns must
+        # survive the round trip unchanged -- a re-parsed "False" string would
+        # silently make every QC gate truthy.
+        shard_dir = outdir / "shards"
+        shard_dir.mkdir(parents=True, exist_ok=True)
+        part = shard_dir / f"part_{args.shard:05d}.pkl"
+        pd.to_pickle({"loci": all_loci, "skipped": skipped}, part)
+        print(f"\nShard {args.shard}: {len(all_loci)} protein(s) with loci, "
+              f"{len(skipped)} skipped -> {part}")
+        return
+
+    reduce_and_report(all_loci, skipped, args, a, b, ref, outdir)
+
+
+def reduce_and_report(all_loci, skipped, args, a, b, ref, outdir) -> None:
+    """Aggregate every protein's loci and run the global tests.
+
+    Kept separate from the per-protein work so it can run as its own SLURM job
+    after an array of shards. The multiple-testing correction and the variance
+    tests are inherently global -- they need every protein in one frame -- so
+    they cannot be sharded, only deferred.
+    """
     if not all_loci:
         for p, why in skipped:
             print(f"  {p:<12} skipped: {why}")
@@ -783,7 +870,6 @@ def main() -> None:
         print(f"      {outdir/'comparison_plots.png'}")
     else:
         print("      (no plots: matplotlib unavailable)")
-
 
 if __name__ == "__main__":
     main()
