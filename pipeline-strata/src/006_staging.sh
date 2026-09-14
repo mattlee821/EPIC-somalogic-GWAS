@@ -307,7 +307,9 @@ else
     dest="${PLAN_DESTS[$idx]}"
     (
       mkdir -p "$(dirname -- "$dest")"
-      echo "copying $(basename -- "$src")"
+      # The source basename is "meta.tsv.gz" for every file, so logging it
+      # produced 783 identical lines. The destination is what identifies it.
+      echo "copying ${dest#"${ABS_TRANSFER_DIR}/"}"
       rsync -aL --no-group -- "$src" "$dest"
     ) &
   done
