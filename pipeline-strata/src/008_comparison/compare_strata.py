@@ -559,6 +559,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-het-isq", type=float, default=75.0)
     ap.add_argument("--max-eaf-diff", type=float, default=0.05)
     ap.add_argument("--proteins", default="", help="comma-separated subset")
+    ap.add_argument("--allow-unannotated", action="store_true",
+                    help="analyse staged proteins missing from --annot instead "
+                         "of excluding them. They count as TARGETED.")
     ap.add_argument("--jobs", "-j", type=int, default=default_jobs(),
                     help="parallel workers; proteins are independent. Defaults to "
                          "SLURM_CPUS_PER_TASK under sbatch, else cpu_count-1.")
@@ -587,15 +590,40 @@ def main() -> None:
         gene_map = pd.read_csv(args.gene_map, sep="\t", dtype=str)
 
     controls: set[str] = set()
+    panel: set[str] = set()
     if args.annot and Path(args.annot).exists():
         ann = pd.read_csv(args.annot, sep="\t", dtype=str)
         controls = set(ann.loc[ann["source"] == "random_control", "seqid"])
+        panel = set(ann["seqid"].dropna())
 
     wanted = {p.strip() for p in args.proteins.split(",") if p.strip()}
     proteins = sorted(d.name for d in staged.iterdir()
                       if d.is_dir() and (not wanted or d.name in wanted))
     if not proteins:
         sys.exit(f"ERROR: no protein directories under {staged}")
+
+    # The staging directory is CUMULATIVE -- earlier runs leave their proteins
+    # behind -- so it is not the definition of the analysis set. The annotation
+    # is. This matters more than it looks: a protein absent from the annotation
+    # is not flagged CONTROL, so it lands in `testable` and is counted as a
+    # TARGETED locus, quietly padding the very set questions 2 and 3 are about.
+    if panel:
+        extra = [p for p in proteins if p not in panel]
+        if extra and not args.allow_unannotated:
+            proteins = [p for p in proteins if p in panel]
+            shown = ", ".join(extra[:10]) + (" ..." if len(extra) > 10 else "")
+            print(f"NOTE: {len(extra)} staged protein(s) are not in the annotation "
+                  f"and were EXCLUDED (stale output from an earlier run?):\n"
+                  f"      {shown}\n"
+                  f"      Pass --allow-unannotated to analyse them as targeted.")
+        elif extra:
+            print(f"NOTE: {len(extra)} staged protein(s) are not in the annotation "
+                  f"and will be counted as TARGETED (--allow-unannotated).")
+        missing = sorted(panel - set(proteins))
+        if missing:
+            shown = ", ".join(missing[:10]) + (" ..." if len(missing) > 10 else "")
+            print(f"NOTE: {len(missing)} annotated protein(s) have no staged "
+                  f"results: {shown}")
 
     print(f"Comparing '{a}' vs '{b}', discovery from '{ref}' at P < {args.p_discovery:g}")
     plink_mb = plink_memory_mb(args.plink_memory, args.jobs)
