@@ -3,10 +3,13 @@
 #SBATCH --output=src/logs/008_comparison.log
 #SBATCH --error=src/logs/008_comparison.err
 #SBATCH --time=8:00:00
-#SBATCH --mem=32G
-#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --cpus-per-task=32
 #SBATCH --partition=high_p
 #SBATCH --open-mode=truncate
+#
+# One protein per worker, --jobs taken from --cpus-per-task above, so to use
+# more or fewer cores just override the allocation:  sbatch -c 48 --mem=96G ...
 
 # Compare pQTL effects between strata on the staged results.
 #
@@ -70,12 +73,6 @@ while [[ $# -gt 0 ]]; do
     --reference) REFERENCE="$2"; shift 2 ;;
     --p-discovery) PDISC="$2"; shift 2 ;;
     --annot) ANNOT="$2"; shift 2 ;;
-    # Set by submit_comparison.sh. The array index is only known inside the
-    # task, so the shard number cannot be baked into the submitted command.
-    --shard-from-array)
-      [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || {
-        echo "ERROR: --shard-from-array outside a SLURM array job" >&2; exit 1; }
-      EXTRA+=(--shard "${SLURM_ARRAY_TASK_ID}"); shift ;;
     -h|--help) sed -n '10,20p' "${BASH_SOURCE[0]:-$0}"; exit 0 ;;
     *) EXTRA+=("$1"); shift ;;
   esac
