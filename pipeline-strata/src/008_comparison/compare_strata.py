@@ -707,7 +707,13 @@ def main() -> None:
     # reference point.
     cis_m   = loci["CIS"] == "cis"
     trans_m = loci["CIS"] == "trans"
-    ctrl    = loci["QC_PASS"] & loci["CONTROL"]
+    # PRIMARY only, exactly as `testable` is. Without the tier filter the
+    # random-proteome set silently absorbed the secondary (winner's-curse)
+    # loci: on the 261-protein run that mixed 178 variants with var(z)=6.8 into
+    # 647 with var(z)~1.1, reported the result as var(z)=2.32, and turned
+    # "no general difference" into P=2e-88. The two sets being compared must be
+    # selected the same way or the F ratio compares selection, not biology.
+    ctrl    = loci["QC_PASS"] & loci["CONTROL"] & (loci["TIER"] == "primary")
     secnd   = loci["QC_PASS"] & (loci["TIER"] == "secondary")
 
     rows = [
