@@ -730,7 +730,7 @@ data_pheno <- data_genetic |>
 pheno_dir <- get_env("GWAS_PHENO_DIR")
 if (is.null(pheno_dir) || pheno_dir == "") {
   stop("GWAS_PHENO_DIR is not set. This tree must write its phenotype files to a ",
-       "directory of its own -- see pipeline-strata/.env.example.")
+       "directory of its own -- see pipeline-strata/.env.")
 }
 frozen_pheno_dir <- file.path(dirname(genetics_path), "phenotype")
 if (normalizePath(pheno_dir, mustWork = FALSE) ==

@@ -24,6 +24,7 @@
 #
 # Read from .env:
 #   GWAS_STAGING_DIR         Local directory to upload (default for --dir)
+# Read from the untracked server.env:
 #   GWAS_TRANSFER_SUBDIR     Remote folder name        (default for --name)
 #   GWAS_TRANSFER_HOST       SFTP hostname
 #   GWAS_TRANSFER_USER       SFTP username
@@ -58,6 +59,7 @@ _GWAS_ENV_LIB="$(_gwas_find_lib)" || {
 source "$_GWAS_ENV_LIB"
 
 load_env_file "${PROJ_ROOT}/.env" || true
+load_env_file "${PROJ_ROOT}/server.env" || true
 mkdir -p "${PROJ_ROOT}/src/logs"
 
 LOCAL_DIR="${GWAS_STAGING_DIR:-}"

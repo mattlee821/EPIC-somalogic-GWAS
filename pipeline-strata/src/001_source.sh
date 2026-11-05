@@ -73,6 +73,8 @@ done
 
 # Resolve PROJ_ROOT only after .env is sourced, so GWAS_PROJECT_ROOT is honoured.
 PROJ_ROOT="${GWAS_PROJECT_ROOT:-$DEFAULT_PROJ_ROOT}"
+# SLURM opens the #SBATCH log paths before a job starts.
+mkdir -p "${PROJ_ROOT}/src/logs"
 PIPELINE_DIR="${PROJ_ROOT}/pipeline"
 # Prebuilt pipeline conda environments live here (one prefix env per spec in
 # pipeline/envs/). The Nextflow modules point their `conda` directive at

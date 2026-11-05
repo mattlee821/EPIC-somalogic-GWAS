@@ -98,7 +98,7 @@ repository root. `002` in particular writes to the shared genetics directory.
 ## Running
 
 ```bash
-cp .env.example .env          # then check every path
+cp server.env .env            # server.env holds the real paths; never commit it
 Rscript src/003_data-phenotype.R     # strata columns + samplesheet
 sbatch  src/005_run.sh --out /WHERE/epic-gwas/strata-test \
                        --proteins "" --studies "Neuro_01,Brea_01_Erneg"

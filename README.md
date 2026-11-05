@@ -11,6 +11,10 @@ summary.
 The finalized workflow lives in `pipeline/`. The helper scripts used to prepare
 local inputs and submit the pipeline live in `src/`.
 
+## Branches
+
+`main` carries the finished pipeline in `pipeline/` and `src/`, and the `paper-v1` tag marks the state used for the publication. This `pipeline-strata` branch adds `pipeline-strata/`, a pipeline in development that stratifies individuals by a variable such as smoking status. See `pipeline-strata/README.md`.
+
 ## Quick Start
 
 ### 0. Set the Paths

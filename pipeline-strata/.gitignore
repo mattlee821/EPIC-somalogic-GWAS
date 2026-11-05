@@ -1,9 +1,8 @@
 # Nested gitignore: the root one anchors its result patterns with a leading
 # slash, so they do not reach into this tree.
 
-.env
-.env.local
-.env.*
+# Real settings; the tracked .env holds placeholders
+server.env
 
 # Nextflow run state
 work/
