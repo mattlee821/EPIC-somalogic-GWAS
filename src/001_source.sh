@@ -27,6 +27,10 @@ source_env_file() {
   if [[ -f "$env_file" ]]; then
     set -a
     source "$env_file"
+    # server.env holds the real settings and overrides the placeholders in .env.
+    if [[ -f "$(dirname -- "$env_file")/server.env" ]]; then
+      source "$(dirname -- "$env_file")/server.env"
+    fi
     set +a
   fi
 }

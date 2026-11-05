@@ -15,23 +15,28 @@ local inputs and submit the pipeline live in `src/`.
 
 ### 0. Set the Paths
 
-The tracked `.env` holds `/WHERE/...` placeholders and stays fixed in the repository. On the server, keep real values in an untracked `server.env` with the same settings, and copy it over `.env`:
+Do not edit any tracked file on a server, because a local change blocks `git pull`. The tracked `.env` holds `/WHERE/...` placeholders and stays fixed. Put real values in an untracked `server.env` beside it, using the same names. The scripts read `server.env` after `.env`, so its values take priority.
 
-```bash
-cp server.env .env
-```
+Set these in `server.env` before running any scripts:
 
-Check these values before running any scripts:
+| Setting | Meaning |
+|---|---|
+| `GWAS_PROJECT_ROOT` | Project root on the server |
+| `GWAS_RESULTS_DIR`, `GWAS_WORK_DIR` | Results and Nextflow work directories |
+| `GWAS_PARTITION` | SLURM partition for pipeline tasks; empty uses the cluster default |
+| `GWAS_SOURCE_GENETICS_DIR`, `GWAS_GENETICS_DIR`, `GWAS_DEPOT_GENETICS_DIR` | Genetics source and analysis-ready directories |
+| `GWAS_EXTERNAL_SOMA_RDS` | Normalised SomaScan data |
+| `GWAS_PHENO_FILE`, `GWAS_INCLUDE_PROTEINS`, `GWAS_SAMPLESHEET` | Files written by `src/003_data-phenotype.R` |
+| `GWAS_METAL_BIN` | METAL binary |
+| `GWAS_LDSC_HOME` | LDSC source (`munge_sumstats.py`, `ldsc.py`) |
+| `GWAS_LDSC_REF_DIR` | EUR LD scores |
+| `GWAS_LDSC_HM3` | HapMap3 SNP list without the MHC |
+| `GWAS_PROTEIN_GENE_MAP` | Protein to gene map |
+| `GWAS_LD_REF_PFILE` | LD reference prefix; empty uses distance-based clumping |
+| `GWAS_STAGING_DIR` | Staging directory for `src/006_staging.sh` |
+| `GWAS_TRANSFER_HOST`, `GWAS_TRANSFER_USER`, `GWAS_TRANSFER_PASS`, `GWAS_TRANSFER_REMOTE_DIR` | Settings for `src/007_transfer.sh`, which are never tracked |
 
-- `GWAS_PROJECT_ROOT`
-- `GWAS_RESULTS_DIR`
-- `GWAS_GENETICS_DIR`
-- `GWAS_PHENO_FILE`
-- `GWAS_SAMPLESHEET`
-- `GWAS_EXTERNAL_SOMA_RDS`
-- `GWAS_DEPOT_GENETICS_DIR`
-
-The `src/00*` helper scripts source `.env` and use those paths to prepare inputs, run Nextflow and stage final transfer files. `src/007_transfer.sh` also reads `server.env`, which must set `GWAS_TRANSFER_HOST`, `GWAS_TRANSFER_USER`, `GWAS_TRANSFER_PASS` and `GWAS_TRANSFER_REMOTE_DIR`. No transfer settings are tracked.
+`pipeline/nextflow.config` reads the 5 LDSC and reference settings from the environment, because `-params-file` would otherwise outrank them. `src/005_run.sh` exports them to Nextflow, so run the pipeline through that wrapper.
 
 `analysis/`, `output/`, `docs/`, `data/` and `server.env` are local only and ignored by git. `src/001_source.sh` creates `src/logs/`, which the `#SBATCH` log paths need, so run it first with `bash`.
 
@@ -51,11 +56,11 @@ Run the input preparation scripts in order:
 ```bash
 bash src/002_data-genetics.sh
 Rscript src/003_data-phenotype.R
-Rscript src/004_samplesheet.R
+bash src/004_ldsc-herit.sh
 ```
 
-These create or update the genetics layout, phenotype files, trait lists, and
-`pipeline/samplesheet.csv`.
+These create or update the genetics layout, phenotype files, trait lists, the
+samplesheet (`GWAS_SAMPLESHEET`) and the LDSC and heritability reference data.
 
 ### 3. Run the GWAS Pipeline
 
@@ -119,11 +124,11 @@ sbatch src/006_staging.sh --out analysis/full --transfer transfer
 
 For a fresh run, use the numbered helper scripts in this order:
 
-1. Copy `server.env` over `.env`.
+1. Create `server.env`.
 2. `bash src/001_source.sh`
 3. `bash src/002_data-genetics.sh`
 4. `Rscript src/003_data-phenotype.R`
-5. `Rscript src/004_samplesheet.R`
+5. `bash src/004_ldsc-herit.sh`
 6. `sbatch src/005_run.sh ...`
 7. `bash src/006_staging.sh --out <analysis-dir> --transfer <transfer-dir>`
 
@@ -202,7 +207,7 @@ sbatch src/005_run.sh [options]
 Supported wrapper options:
 
 - `--profile`: Nextflow profile. Default: `slurm`.
-- `--out`, `-o`, `--outdir`: output directory. Default: `<project>/analysis`.
+- `--out`, `-o`, `--outdir`: output directory. Default: `GWAS_RESULTS_DIR`.
 - `--studies`: comma-separated study IDs.
 - `--proteins`: comma-separated protein IDs, a list file, or `""` for all
   numeric traits.
@@ -216,7 +221,7 @@ Supported wrapper options:
   within-study meta outputs are meta-analyzed across studies. Explicit values can
   include `cases`, `controls`, `combined`, and `meta` if those outputs exist.
 
-The wrapper sources `.env`, sets `GWAS_PROJECT_ROOT`, activates the `nf_master`
+The wrapper sources `.env` and `server.env`, sets `GWAS_PROJECT_ROOT`, activates the `nf_master`
 conda environment, and runs:
 
 ```bash
@@ -232,13 +237,15 @@ Primary helper scripts:
   METAL binary into `pipeline/tools/metal/metal`.
 - `src/002_data-genetics.sh`: project-specific helper to copy documented genetic
   inputs into the local data layout.
-- `src/003_data-phenotype.R`: build `data/phenotype/phenofile.txt` and trait list
-  files such as `traits-10.txt`, `traits-100.txt`, and `traits-1000.txt`.
-- `src/004_samplesheet.R`: generate `pipeline/samplesheet.csv` from the phenotype
-  file and genetics directory.
+- `src/003_data-phenotype.R`: build `data/phenotype/phenofile.txt`, trait list
+  files such as `traits-10.txt`, `traits-100.txt`, and `traits-1000.txt`, and the
+  samplesheet.
+- `src/004_ldsc-herit.sh`: install the LDSC reference data and build the protein
+  to gene map and LD reference used by the LDSC and heritability steps.
 - `src/005_run.sh`: SLURM submission wrapper for the Nextflow pipeline.
 - `src/006_staging.sh`: final staging step that collects across-study
   meta-analysis outputs into a transfer/upload directory.
+- `src/007_transfer.sh`: upload the staged files over SFTP.
 
 ## Pipeline Parameters
 

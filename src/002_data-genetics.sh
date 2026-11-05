@@ -48,7 +48,10 @@ set -euo pipefail
 # (where sbatch was launched) before the PWD/script-relative locations.
 for env_file in "${SLURM_SUBMIT_DIR:-/nonexistent}/.env" ".env" "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.env"; do
   if [ -f "$env_file" ]; then
-    set -a; source "$env_file"; set +a
+    set -a; source "$env_file"
+    # server.env holds the real settings and overrides the placeholders in .env.
+    if [ -f "$(dirname -- "$env_file")/server.env" ]; then source "$(dirname -- "$env_file")/server.env"; fi
+    set +a
     break
   fi
 done

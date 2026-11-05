@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
     --list) LIST_ONLY=1; shift ;;
     -h|--help)
       echo "Usage: bash src/007_transfer.sh [--dir <staged-directory>] [--list]"
-      echo "       Default: GWAS_STAGING_DIR from .env"
+      echo "       Default: GWAS_STAGING_DIR from server.env"
       echo "       --list  List files on the remote without uploading"
       exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -57,21 +57,27 @@ REMOTE_DIR="${GWAS_TRANSFER_REMOTE_DIR:?GWAS_TRANSFER_REMOTE_DIR not set}"
 if [[ "$LIST_ONLY" -eq 1 ]]; then
   echo "Listing remote: ${SFTP_USER}@${SFTP_HOST}:${REMOTE_DIR}"
 else
-  [[ -n "$LOCAL_DIR" ]] || { echo "ERROR: --dir is required (or set GWAS_STAGING_DIR in .env)" >&2; exit 1; }
+  [[ -n "$LOCAL_DIR" ]] || { echo "ERROR: --dir is required (or set GWAS_STAGING_DIR in server.env)" >&2; exit 1; }
   [[ -d "$LOCAL_DIR" ]] || { echo "ERROR: Directory not found: $LOCAL_DIR" >&2; exit 1; }
   N_FILES="$(find "$LOCAL_DIR" -maxdepth 1 \( -type f -o -type l \) | wc -l)"
   echo "Uploading ${N_FILES} file(s) from $LOCAL_DIR"
   echo "  -> ${SFTP_USER}@${SFTP_HOST}:${REMOTE_DIR}"
 fi
 
-python3 - <<PYEOF
-import pathlib, paramiko
+# Secrets and paths go to Python through the environment, not interpolated into
+# the heredoc: a password containing a quote or backslash would otherwise break
+# the script or inject into it.
+export XFER_HOST="$SFTP_HOST" XFER_USER="$SFTP_USER" XFER_PASS="$SFTP_PASS"
+export XFER_REMOTE="$REMOTE_DIR" XFER_LOCAL="${LOCAL_DIR:-}" XFER_LIST="$LIST_ONLY"
 
-host       = """$SFTP_HOST"""
-user       = """$SFTP_USER"""
-password   = """$SFTP_PASS"""
-remote_dir = """$REMOTE_DIR"""
-list_only  = bool(int("""$LIST_ONLY"""))
+python3 - <<'PYEOF'
+import os, pathlib, paramiko
+
+host       = os.environ["XFER_HOST"]
+user       = os.environ["XFER_USER"]
+password   = os.environ["XFER_PASS"]
+remote_dir = os.environ["XFER_REMOTE"]
+list_only  = os.environ["XFER_LIST"] == "1"
 
 transport = paramiko.Transport((host, 22))
 transport.connect(username=user, password=password)
@@ -85,7 +91,7 @@ if list_only:
         print(f"{e.st_size:>12,}  {e.filename}")
     print(f"\n{len(entries)} file(s) in {remote_dir}")
 else:
-    local_dir = pathlib.Path("""$LOCAL_DIR""")
+    local_dir = pathlib.Path(os.environ["XFER_LOCAL"])
     # Transfer the directory itself: create remote_dir/<local_dir name>/ and
     # upload the files into it (rather than flattening into remote_dir).
     dest_dir = remote_dir.rstrip("/") + "/" + local_dir.name

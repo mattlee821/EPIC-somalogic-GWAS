@@ -32,6 +32,8 @@ for (p in search_paths) {
   env_p <- file.path(p, ".env")
   if (file.exists(env_p)) {
     load_dot_env(env_p)
+    # server.env holds the real settings and overrides the placeholders in .env.
+    load_dot_env(file.path(p, "server.env"))
     break
   }
 }
