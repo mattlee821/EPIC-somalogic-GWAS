@@ -306,8 +306,8 @@ bio_lookup <- meta_sample |>
   dplyr::distinct(bio, IID_clean)
 
 # Not every study writes Idepic_Bio the same way. Neuro_01's .psam stores it
-# with the underscore RUN COLLAPSED to one character -- "00_00000003" for
-# "00____00000004" -- which matches neither an exact Idepic_Bio nor the
+# with the underscore RUN COLLAPSED to one character -- "00_00000002" for
+# "00____00000003" -- which matches neither an exact Idepic_Bio nor the
 # "<digits>____<digits>" component pattern, so all 4,415 of its samples were
 # silently dropped. Collapsing is injective over this metadata (Idepic_Bio and
 # its collapsed form both have 17,594 unique values), so the canonical ID is
@@ -328,7 +328,7 @@ extract_bio <- function(iid, bio_set) {
   hit <- ifelse(iid %in% bio_set, iid, NA_character_)
 
   # 2. an Idepic_Bio component of a compound IID, e.g.
-  #    "00____0000000A_00____00000001" -> "00____00000002"
+  #    "00____0000000A_00____00000001" -> "00____00000004"
   need <- is.na(hit)
   if (any(need)) {
     cand <- regmatches(iid[need], gregexpr("[0-9]+_{4,}[0-9]+", iid[need]))
@@ -754,6 +754,104 @@ data.table::fwrite(
   row.names = FALSE
 )
 message("Wrote ", phenofile, " with ", length(protein_cols), " proteins.")
+
+# per-protein distribution by stratum ====
+# METHODS.md items 1 and 2 both need this and nothing else writes it.
+#
+#   item 1  the diagnostic regression is oriented mean(z) ~ mean shift x SKEWNESS,
+#           because a whole-sample inverse-rank transform distorts the comparison
+#           only when the protein is skewed AND its mean differs between strata
+#   item 2  the rescaled within-stratum transform needs each arm's robust scale,
+#           and the ratio of those scales IS the divergence between the absolute
+#           and standardised estimands, so it is reported rather than applied
+#           silently
+#
+# Skewness here is of the SUPPLIED phenotype, which is already whole-sample
+# inverse-rank normalised. That is deliberate and is the right statistic, not a
+# second-best substitute for raw skewness (which is unavailable):
+#
+#   because the transform is whole-sample, the marginal distribution is normal by
+#   construction, so WITHIN-stratum skewness is non-zero only when the raw
+#   distribution was skewed AND the strata differ in mean -- exactly the
+#   interaction that produces the distortion, in a single number.
+#
+# Simulated: Gaussian raw gives ~0.00 with or without a mean shift; lognormal raw
+# gives ~0.00 with no shift and 0.31-0.87 at a 0.75 SD shift. See METHODS.md 9.1.
+#
+# Scale is IQR-based and normal-consistent, for the same reason the phenotype was
+# rank-normalised: an SD-based constant is outlier-sensitive.
+col_stats <- function(m) {
+  n  <- colSums(!is.na(m))
+  mu <- colMeans(m, na.rm = TRUE)
+  ctr <- sweep(m, 2, mu, "-")
+  sd_  <- sqrt(colMeans(ctr^2, na.rm = TRUE) * n / pmax(n - 1, 1))
+  skew <- colMeans(ctr^3, na.rm = TRUE) / pmax(colMeans(ctr^2, na.rm = TRUE)^1.5, .Machine$double.eps)
+  qs <- apply(m, 2, stats::quantile, probs = c(0.25, 0.75), na.rm = TRUE, names = FALSE)
+  list(n = n, mean = mu, sd = sd_, skew = skew,
+       iqr_scale = (qs[2, ] - qs[1, ]) / 1.3489795)
+}
+
+dist_rows <- list()
+for (nm in strata_derived) {
+  lvls <- setdiff(unique(data_pheno[[nm]]), NA)
+  for (lv in lvls) {
+    idx <- which(data_pheno[[nm]] == lv)
+    if (length(idx) < 20) next
+    # Chunked: the protein matrix is large and (x-mu)^3 would double it.
+    for (blk in split(protein_cols, ceiling(seq_along(protein_cols) / 500))) {
+      m <- as.matrix(data_pheno[idx, blk, drop = FALSE])
+      s <- col_stats(m)
+      dist_rows[[length(dist_rows) + 1]] <- data.frame(
+        protein = blk, stratum_var = nm, stratum = as.character(lv),
+        n = s$n, mean = s$mean, sd = s$sd, skewness = s$skew,
+        iqr_scale = s$iqr_scale, stringsAsFactors = FALSE, row.names = NULL
+      )
+    }
+  }
+}
+if (length(dist_rows)) {
+  protein_dist <- do.call(rbind, dist_rows)
+  path <- file.path(pheno_dir, "protein_distribution.tsv")
+  data.table::fwrite(protein_dist, path, sep = "\t", quote = FALSE)
+  message("Wrote ", path, " (", nrow(protein_dist), " protein x stratum rows).")
+  # The two numbers the diagnostic actually keys on, for the paired strata.
+  for (nm in unique(protein_dist$stratum_var)) {
+    d <- protein_dist[protein_dist$stratum_var == nm, ]
+    lv <- unique(d$stratum)
+    if (length(lv) != 2) next
+    a <- d[d$stratum == lv[1], ]; b <- d[d$stratum == lv[2], ]
+    b <- b[match(a$protein, b$protein), ]
+    shift <- (a$mean - b$mean) / ((a$sd + b$sd) / 2)
+    ratio <- a$iqr_scale / b$iqr_scale
+    message("  ", nm, " ", lv[1], " vs ", lv[2],
+            ": |mean shift| median ", round(median(abs(shift), na.rm = TRUE), 3),
+            ", max ", round(max(abs(shift), na.rm = TRUE), 2),
+            "; spread ratio median ", round(median(ratio, na.rm = TRUE), 3))
+    # MEAN SHIFT is the driver, not the skewness level. Simulated: a Gaussian
+    # protein shows ~0% slope difference at ANY shift, while a skewed one shows
+    # -1.3% at a 0.027 SD shift and -25% at 0.63 SD. The level of within-stratum
+    # skewness is a baseline property of this phenotype -- smoking and BMI give
+    # near-identical distributions (0.548 vs 0.561) -- so it cannot be the
+    # filter. Report the shift distribution, and skewness only as its modifier.
+    ashift <- abs(shift)
+    qs <- stats::quantile(ashift, c(0.5, 0.9, 0.99, 1), na.rm = TRUE)
+    message("    |mean shift| (SD units): median ", round(qs[1], 3),
+            ", p90 ", round(qs[2], 3), ", p99 ", round(qs[3], 3),
+            ", max ", round(qs[4], 3))
+    for (thr in c(0.1, 0.2, 0.3)) {
+      message("      proteins with |mean shift| > ", thr, ": ",
+              sum(ashift > thr, na.rm = TRUE), " of ", nrow(a))
+    }
+    # The artefact needs BOTH ingredients, so report the product.
+    sk <- pmax(abs(a$skewness), abs(b$skewness))
+    risk <- ashift * sk
+    rq <- stats::quantile(risk, c(0.5, 0.9, 0.99, 1), na.rm = TRUE)
+    message("    |mean shift| x |skew| (the artefact needs both): median ",
+            round(rq[1], 3), ", p90 ", round(rq[2], 3), ", p99 ", round(rq[3], 3),
+            ", max ", round(rq[4], 3))
+    message("    -- restrict on THIS, not on skewness alone. METHODS.md 9.1")
+  }
+}
 
 path <- file.path(pheno_dir, "meta-feature.txt")
 data.table::fwrite(

@@ -321,6 +321,124 @@ def global_test(z: np.ndarray, label: str) -> dict:
     }
 
 
+def oriented_mean(z: np.ndarray, sign: np.ndarray) -> dict:
+    """Mean of z after orienting each variant by the sign of its meta effect.
+
+    A monotone-but-nonlinear phenotype transform (whole-sample INT) applied to a
+    SKEWED protein whose mean differs between strata gives the two strata
+    different local slopes, a_ever and a_never. Under a TRUE null of equal raw
+    per-allele effect that produces
+
+        z_diff = z_main * (a_e - a_n) / sqrt(a_e^2 + a_n^2)
+
+    i.e. a distortion PROPORTIONAL to the strength of the pQTL. Because the
+    effect allele's orientation is arbitrary, the sign of z_diff is arbitrary
+    too: the distortion inflates var(z) but leaves mean(z) at zero, so an
+    unoriented mean cannot see it.
+
+    Orienting by sign(beta_meta) makes the distortion one-directional and turns
+    it into a mean, which is far better powered than a variance. Simulation:
+    for a Gaussian protein the slope difference is ~0.2% and invisible; for a
+    lognormal or gamma protein shifted 0.5-1.0 SD it reaches 28-58%, which is
+    z_diff of 8-15 at a strong cis-pQTL.
+    """
+    ok = np.isfinite(z) & np.isfinite(sign) & (sign != 0)
+    zo = z[ok] * np.sign(sign[ok])
+    if zo.size < 3:
+        return {"n_oriented": int(zo.size), "mean_z_oriented": np.nan,
+                "mean_z_oriented_p": np.nan}
+    se = float(np.std(zo, ddof=1) / np.sqrt(zo.size))
+    mu = float(np.mean(zo))
+    return {"n_oriented": int(zo.size), "mean_z_oriented": mu,
+            "mean_z_oriented_p": float(2.0 * stats.norm.sf(abs(mu / se))) if se > 0 else np.nan}
+
+
+def dedup_distribution(df: pd.DataFrame, draws: int = 1000) -> dict:
+    """var(z) over many random deduplications, not one.
+
+    A single draw makes the headline figure depend on an arbitrary seed. This
+    reports the distribution instead.
+    """
+    if df.empty or df["SNP"].nunique() == len(df):
+        z = pd.to_numeric(df["Z_DIFF"], errors="coerce").dropna().values
+        if z.size < 3:
+            return {}
+        v = float(np.var(z, ddof=1))
+        return {"n": int(z.size), "var_z_median": v, "var_z_lo": v, "var_z_hi": v,
+                "draws": 0}
+    vs = []
+    for s in range(draws):
+        d = df.sample(frac=1.0, random_state=s).drop_duplicates("SNP", keep="first")
+        z = pd.to_numeric(d["Z_DIFF"], errors="coerce").dropna().values
+        if z.size >= 3:
+            vs.append(float(np.var(z, ddof=1)))
+    if not vs:
+        return {}
+    vs = np.array(vs)
+    return {"n": int(df["SNP"].nunique()),
+            "var_z_median": float(np.median(vs)),
+            "var_z_lo": float(np.percentile(vs, 2.5)),
+            "var_z_hi": float(np.percentile(vs, 97.5)),
+            "draws": int(vs.size)}
+
+
+def dedup_by_variant(df: pd.DataFrame, seed: int = 0) -> pd.DataFrame:
+    """One locus per DISTINCT variant, chosen at random.
+
+    Clumping runs within a protein, so it cannot see that the same variant
+    indexes many proteins -- trans-pQTL hotspots do exactly that. Those z
+    statistics share the same genotype and are correlated, so the effective
+    number of independent tests is below m and the chi-square df (m-1) and the
+    F df are both overstated.
+
+    Chosen at RANDOM rather than by strongest z: keeping the best locus per
+    variant would select on the statistic being tested and bias var(z) upward.
+    """
+    if df.empty:
+        return df
+    return df.sample(frac=1.0, random_state=seed).drop_duplicates("SNP", keep="first")
+
+
+def variant_reuse(df: pd.DataFrame) -> dict:
+    """How far the independence assumption is from true, in one row."""
+    if df.empty:
+        return {"n_tests": 0, "n_variants": 0, "max_per_variant": 0, "pct_reused": np.nan}
+    counts = df["SNP"].value_counts()
+    return {
+        "n_tests": int(len(df)),
+        "n_variants": int(counts.size),
+        "max_per_variant": int(counts.iloc[0]),
+        "pct_reused": float(100.0 * (len(df) - counts.size) / len(df)),
+    }
+
+
+def maf_bins(df: pd.DataFrame, eaf_col: str) -> pd.DataFrame:
+    """var(z) by MAF band.
+
+    The whole inference rests on an analytic null, so any tail miscalibration
+    goes straight into var(z). At ~4,000 per stratum a MAF of 0.01 is a minor
+    allele count near 80, where the normal approximation starts to degrade --
+    if var(z) rises as MAF falls, the null is the problem, not the biology.
+    """
+    if df.empty or eaf_col not in df.columns:
+        return pd.DataFrame()
+    d = df.copy()
+    eaf = pd.to_numeric(d[eaf_col], errors="coerce")
+    d["MAF"] = np.minimum(eaf, 1.0 - eaf)
+    edges = [0.0, 0.01, 0.02, 0.05, 0.10, 0.20, 0.50]
+    d["BIN"] = pd.cut(d["MAF"], edges, include_lowest=True)
+    out = []
+    for b, g in d.groupby("BIN", observed=True):
+        z = pd.to_numeric(g["Z_DIFF"], errors="coerce").dropna().values
+        if z.size < 3:
+            continue
+        out.append({"maf_bin": str(b), "n": int(z.size),
+                    "var_z": float(np.var(z, ddof=1)),
+                    "var_z_p": float(stats.chi2.sf((z.size - 1) * np.var(z, ddof=1),
+                                                   z.size - 1))})
+    return pd.DataFrame(out)
+
+
 def variance_ratio_test(rows: list[dict], num: str, den: str) -> dict | None:
     """F test: is one set's between-stratum heterogeneity greater than another's?
 
@@ -724,6 +842,13 @@ def main() -> None:
         global_test(loci.loc[ctrl & cis_m, "Z_DIFF"].values, "primary_random_proteome_cis"),
         global_test(loci.loc[ctrl & trans_m, "Z_DIFF"].values, "primary_random_proteome_trans"),
         global_test(loci.loc[secnd, "Z_DIFF"].values, "secondary_selection_biased"),
+        # Same two sets, one locus per distinct variant. If these differ much
+        # from the rows above, the chi-square and F degrees of freedom above
+        # are overstated and only these are safe to quote.
+        global_test(dedup_by_variant(loci.loc[testable])["Z_DIFF"].values,
+                    "primary_targeted_dedup"),
+        global_test(dedup_by_variant(loci.loc[ctrl])["Z_DIFF"].values,
+                    "primary_random_proteome_dedup"),
     ]
     gt = pd.DataFrame(rows)
     gt.to_csv(outdir / "global_test.tsv", sep="\t", index=False, na_rep="NA")
@@ -733,6 +858,8 @@ def main() -> None:
     # isolates what is specific to the smoking loci.
     ratios = [r for r in (
         variance_ratio_test(rows, "primary_targeted", "primary_random_proteome"),
+        variance_ratio_test(rows, "primary_targeted_dedup",
+                            "primary_random_proteome_dedup"),
         variance_ratio_test(rows, "primary_targeted_cis", "primary_random_proteome_cis"),
         variance_ratio_test(rows, "primary_targeted_trans", "primary_random_proteome_trans"),
     ) if r]
@@ -751,9 +878,81 @@ def main() -> None:
         print(f"{r['set']:<34}{r['n']:>5}{r['mean_z']:>9.3f}{r['var_z']:>8.2f}"
               f"{r['var_z_p']:>10.3g}{r['frac_p_lt_05']:>8.2f}")
 
+    # ---- independence and calibration diagnostics -------------------------
+    ref_eaf = f"EAF_{ref}"
+    reuse_t, reuse_c = variant_reuse(loci.loc[testable]), variant_reuse(loci.loc[ctrl])
+    # ---- INT nonlinearity detector ---------------------------------------
+    # Oriented by sign(beta_meta); see oriented_mean(). Reported for the sets
+    # whose calibration the inference depends on.
+    bref = f"BETA_{ref}"
+    orient_rows = []
+    for lbl, m in (("primary_targeted", testable), ("primary_random_proteome", ctrl),
+                   ("primary_random_proteome_cis", ctrl & cis_m),
+                   ("primary_random_proteome_trans", ctrl & trans_m)):
+        sub = loci.loc[m]
+        if sub.empty or bref not in sub.columns:
+            continue
+        r = oriented_mean(pd.to_numeric(sub["Z_DIFF"], errors="coerce").values,
+                          pd.to_numeric(sub[bref], errors="coerce").values)
+        r["set"] = lbl
+        orient_rows.append(r)
+    if orient_rows:
+        od = pd.DataFrame(orient_rows)[["set", "n_oriented", "mean_z_oriented",
+                                        "mean_z_oriented_p"]]
+        od.to_csv(outdir / "oriented_mean.tsv", sep="\t", index=False, na_rep="NA")
+        print(f"\n{'-'*78}\nIS THE PHENOTYPE TRANSFORM DISTORTING THE COMPARISON?")
+        print("  z oriented by sign(beta_meta). A non-zero mean is the signature of a")
+        print("  skewed protein shifted in mean between strata, not of biology.")
+        print(f"{'set':<34}{'n':>6}{'mean oriented z':>18}{'P':>11}")
+        for r in orient_rows:
+            if r["n_oriented"] >= 3:
+                print(f"{r['set']:<34}{r['n_oriented']:>6}"
+                      f"{r['mean_z_oriented']:>18.3f}{r['mean_z_oriented_p']:>11.3g}")
+
+    print(f"\n{'-'*78}\nARE THE z STATISTICS INDEPENDENT?")
+    print(f"{'set':<28}{'tests':>8}{'variants':>10}{'max/variant':>13}{'% reused':>10}")
+    for lbl, r in (("targeted", reuse_t), ("random proteome", reuse_c)):
+        if r["n_tests"]:
+            print(f"{lbl:<28}{r['n_tests']:>8}{r['n_variants']:>10}"
+                  f"{r['max_per_variant']:>13}{r['pct_reused']:>10.1f}")
+    if max(reuse_t["max_per_variant"], reuse_c["max_per_variant"]) > 1:
+        print("  One variant indexing many proteins makes those z correlated, so the")
+        print("  df above are overstated. Quote the *_dedup rows instead.")
+        # A single deduplication draw makes the headline seed-dependent.
+        dd = []
+        for lbl, m in (("targeted", testable), ("random proteome", ctrl)):
+            r = dedup_distribution(loci.loc[m])
+            if r:
+                r["set"] = lbl
+                dd.append(r)
+        if dd:
+            pd.DataFrame(dd).to_csv(outdir / "dedup_distribution.tsv", sep="\t",
+                                    index=False, na_rep="NA")
+            print(f"\n  var(z) over 1000 deduplication draws (median, 95% interval):")
+            for r in dd:
+                print(f"    {r['set']:<20}n={r['n']:<6}"
+                      f"{r['var_z_median']:.2f}  [{r['var_z_lo']:.2f}, {r['var_z_hi']:.2f}]")
+
+    mb = maf_bins(loci.loc[ctrl], ref_eaf)
+    if not mb.empty:
+        print(f"\n{'-'*78}\nIS THE ANALYTIC NULL CALIBRATED ACROSS MAF?  (random proteome)")
+        print(f"{'MAF bin':<20}{'n':>7}{'var z':>9}{'P(var>1)':>11}")
+        for _, r in mb.iterrows():
+            print(f"{r['maf_bin']:<20}{int(r['n']):>7}{r['var_z']:>9.2f}{r['var_z_p']:>11.3g}")
+        mb.to_csv(outdir / "maf_calibration.tsv", sep="\t", index=False, na_rep="NA")
+
     print(f"\n{'-'*78}\nTHE THREE QUESTIONS")
     def get(lbl):
-        return next((r for r in rows if r["set"] == lbl and r["n"] >= 3), None)
+        """Prefer the deduplicated set: it is the one whose df are honest.
+
+        With no variant reuse the two are identical, so this costs nothing;
+        with reuse it is the only version that can be quoted.
+        """
+        for cand in (f"{lbl}_dedup", lbl):
+            r = next((x for x in rows if x["set"] == cand and x["n"] >= 3), None)
+            if r:
+                return r
+        return None
 
     def verdict(pv: float) -> str:
         """Graded rather than binary. var(z) is a single test on a quantity with
@@ -779,7 +978,8 @@ def main() -> None:
         print(f"  2. Do pQTLs at the TARGETED loci differ?        {verdict(tgt['var_z_p'])}")
         print(f"     targeted: n={tgt['n']}, var(z)={tgt['var_z']:.2f}, P={tgt['var_z_p']:.3g}")
     if ratios:
-        r0 = ratios[0]
+        # ratios[0] is the raw pair, ratios[1] the deduplicated one when present.
+        r0 = next((r for r in ratios if r["numerator"].endswith("_dedup")), ratios[0])
         print(f"  3. Do the TARGETED loci differ MORE than average?  {verdict(r0['p'])}")
         print(f"     F = {r0['var_num']:.2f}/{r0['var_den']:.2f} = {r0['F']:.2f}"
               f" on ({r0['n_num']-1},{r0['n_den']-1}) df, P={r0['p']:.3g}")
