@@ -59,7 +59,6 @@ _GWAS_ENV_LIB="$(_gwas_find_lib)" || {
 source "$_GWAS_ENV_LIB"
 
 load_env_file "${PROJ_ROOT}/.env" || true
-load_env_file "${PROJ_ROOT}/server.env" || true
 mkdir -p "${PROJ_ROOT}/src/logs"
 
 LOCAL_DIR="${GWAS_STAGING_DIR:-}"

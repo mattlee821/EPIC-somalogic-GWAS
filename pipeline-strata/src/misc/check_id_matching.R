@@ -49,7 +49,11 @@ load_dot_env <- function(env_file) {
   invisible(TRUE)
 }
 for (p in c(Sys.getenv("GWAS_PROJECT_ROOT"), ".", "..", "../..")) {
-  if (nzchar(p) && file.exists(file.path(p, ".env"))) { load_dot_env(file.path(p, ".env")); break }
+  if (nzchar(p) && file.exists(file.path(p, ".env"))) {
+    load_dot_env(file.path(p, ".env"))
+    load_dot_env(file.path(p, "server.env"))  # real settings; overrides .env
+    break
+  }
 }
 get_env <- function(k, d = NULL) { v <- Sys.getenv(k); if (v == "") d else v }
 

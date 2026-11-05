@@ -130,21 +130,18 @@ regenie_bsize_step2:  400
 # --- METAL ---
 # Deliberately NOT set here. -params-file overrides nextflow.config, so setting
 # it would shadow the GWAS_METAL_BIN lookup that lets this tree reuse the METAL
-# binary already built in the frozen tree. Set GWAS_METAL_BIN in .env instead.
+# binary already built in the frozen tree. Set GWAS_METAL_BIN in server.env instead.
 
 # --- LDSC (intercept + SNP-h2 on each cross-study meta) ---
 # Data installed by:  bash src/004_ldsc-herit.sh --reference   (shared, under data/reference/).
 # The python env (env/ldsc) is prebuilt by src/001_source.sh. Set ldsc:false to skip.
 ldsc:              true
-ldsc_home:         "/WHERE/epic-gwas/data/reference/ldsc"          # LDSC source (munge_sumstats.py, ldsc.py)
-ldsc_ref_dir:      "/WHERE/epic-gwas/data/reference/eur_w_ld_chr"  # EUR LD scores (Zenodo 10515792)
-ldsc_hm3:          "/WHERE/epic-gwas/data/reference/w_hm3.snplist" # HapMap3 (no-MHC) SNP list
+# Paths: GWAS_LDSC_HOME, GWAS_LDSC_REF_DIR and GWAS_LDSC_HM3 in server.env (see nextflow.config).
 
 # --- Heritability decomposition (UKB-PPP style: pQTL component + polygenic) ---
 # Data built by:  bash src/004_ldsc-herit.sh   (gene map + LD reference, under data/herit/).
 herit:             true
-protein_gene_map:  "/WHERE/epic-gwas/data/herit/protein_gene_map.tsv"  # built by 004 --protein-map
-ld_ref_pfile:      "/WHERE/epic-gwas/data/herit/ldref"   # bed/bim/fam prefix; "" => distance-based clumping
+# Paths: GWAS_PROTEIN_GENE_MAP and GWAS_LD_REF_PFILE in server.env (see nextflow.config).
 cis_window_kb:     1000          # cis = index pQTL within +/-1 Mb of the gene encoding the protein
 herit_p:           5.0e-8        # genome-wide threshold for an index pQTL (set 5e-8/n_proteins for study-wide)
 herit_clump_r2:    0.1           # PLINK --clump-r2 for independent index pQTLs

@@ -61,7 +61,11 @@ load_dot_env <- function(path) {
 proj_root <- Sys.getenv("GWAS_PROJECT_ROOT")
 for (p in c(if (proj_root != "") proj_root, ".", "..", "../..")) {
   f <- file.path(p, ".env")
-  if (file.exists(f)) { load_dot_env(f); break }
+  if (file.exists(f)) {
+    load_dot_env(f)
+    if (file.exists(file.path(p, "server.env"))) load_dot_env(file.path(p, "server.env"))
+    break
+  }
 }
 
 get_env <- function(k, d = NULL) {

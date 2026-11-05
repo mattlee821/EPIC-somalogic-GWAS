@@ -85,8 +85,8 @@ done
 PARAMS="${GWAS_PARAMS_FILE:-${PROJ_ROOT}/pipeline/params.yaml}"
 yml() { sed -n "s/^$1:[[:space:]]*\"\{0,1\}\([^\"#]*\)\"\{0,1\}.*/\1/p" "$PARAMS" | head -1 | xargs; }
 
-LD_REF="$(yml ld_ref_pfile)"
-GENE_MAP="$(yml protein_gene_map)"
+LD_REF="${GWAS_LD_REF_PFILE:-}"
+GENE_MAP="${GWAS_PROTEIN_GENE_MAP:-}"
 CIS_KB="$(yml cis_window_kb)"
 HLA="$(yml hla_region)"
 CLUMP_R2="$(yml herit_clump_r2)"

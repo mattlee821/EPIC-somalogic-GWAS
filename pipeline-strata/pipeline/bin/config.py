@@ -49,6 +49,8 @@ def load_project_dotenv(project_root: str | Path | None = None) -> Path | None:
         env_path = resolved / ".env"
         if env_path.exists():
             load_dot_env(env_path)
+            # server.env holds the real settings and overrides the placeholders.
+            load_dot_env(resolved / "server.env")
             return env_path
 
     return None

@@ -22,7 +22,7 @@
 #     (the lightweight Nextflow driver). Override per-submit without editing:
 #         sbatch --partition=low_p src/005_run.sh
 #   - The partition for ALL submitted pipeline tasks (REGENIE, etc.) is the single
-#     global knob GWAS_PARTITION in .env (read by pipeline/nextflow.config).
+#     global knob GWAS_PARTITION in server.env (read by pipeline/nextflow.config).
 
 set -euo pipefail
 
@@ -158,7 +158,7 @@ Options:
                 list to <path>.txt. Output directory is set by GWAS_RESULTS_DIR
                 in .env (or --out to override). Example: --batch data/phenotype/batch1
   --profile     Nextflow profile (default: slurm)
-  --out, -o     Output directory for results (default: GWAS_ANALYSIS_DIR)
+  --out, -o     Output directory for results (default: GWAS_RESULTS_DIR)
   --studies     Comma-separated list of studies (default: all in samplesheet)
   --proteins    Comma-separated list of proteins or a file path
   --pheno       Path to phenotype file (default: <data>/phenotype/phenofile.txt)
@@ -269,7 +269,7 @@ export NXF_LOG_FILE="${NXF_LOG_FILE:-${PROJ_ROOT}/src/logs/nextflow.log}"
 export GWAS_WORK_DIR="${GWAS_WORK_DIR:-/WHERE/epic-gwas/work-strata}"
 if [[ "${GWAS_WORK_DIR}" == "/WHERE/epic-gwas/work" ]]; then
   echo "ERROR: GWAS_WORK_DIR is the frozen publication tree's work directory." >&2
-  echo "       Set it to a separate path in .env (e.g. .../work-strata)." >&2
+  echo "       Set it to a separate path in server.env (e.g. .../work-strata)." >&2
   exit 1
 fi
 # Per-run cache directory so concurrent batch submissions don't share a lock.
@@ -286,7 +286,7 @@ echo "Output:   $ABS_RESULT_DIR"
 echo "Covars:   ${COVARIATES}"
 echo "Meta-group: ${META_GROUP:-<from params.yaml>}"
 echo "Meta-study: ${META_STUDY:-<from params.yaml>}"
-echo "Partition (tasks): ${GWAS_PARTITION:-low_p}"
+echo "Partition (tasks): ${GWAS_PARTITION:-cluster default}"
 echo "=========================================="
 
 NF_CMD=(

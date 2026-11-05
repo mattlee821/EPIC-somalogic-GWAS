@@ -15,8 +15,10 @@ bash src/008_comparison/run_comparison.sh \
   --out    analysis/comparison
 ```
 
-Reference data (LD panel, gene map, HLA window, cis window, clump r²) is read
-out of `pipeline/params.yaml`, so it cannot drift from what the pipeline used.
+The LD panel and gene map come from `GWAS_LD_REF_PFILE` and `GWAS_PROTEIN_GENE_MAP`
+in `server.env`, the same settings the pipeline uses. The HLA window, cis window
+and clump r² are read out of `pipeline/params.yaml`. Neither can drift from what
+the pipeline used.
 
 ---
 

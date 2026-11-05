@@ -4,10 +4,7 @@ Protein GWAS run **within strata of a participant-level variable** (ever vs neve
 smokers, BMI < 30 vs ≥ 30, and anything else you define), adjusting for disease
 status as a covariate.
 
-This is a **fork, not a branch**, of the publication pipeline. The published
-analysis is frozen at git tag **`paper-v1`** and nothing in this tree modifies
-it. If you need to reproduce the paper, check out that tag and use `pipeline/`
-and `src/` at the repository root — not this directory.
+This tree is in development on the `pipeline-strata` branch and sits beside the finished pipeline, which it does not change. `main` carries the finished pipeline, and the published analysis is frozen at git tag **`paper-v1`**. To reproduce the paper, check out that tag and use `pipeline/` and `src/` at the repository root, not this directory.
 
 > **Before the first real run:** verify the smoking and BMI level codings in
 > `src/003_data-phenotype.R` (`strata_spec`, near the top) against the EPIC data
@@ -97,8 +94,9 @@ repository root. `002` in particular writes to the shared genetics directory.
 
 ## Running
 
+Put real values in an untracked `pipeline-strata/server.env`, using the names in the tracked `pipeline-strata/.env`, which stays fixed so that `git pull` always works. Scripts read `server.env` after `.env`, and an exported variable beats both. As well as the paths, set `GWAS_PARTITION` (empty uses the cluster default) and the 5 reference settings `GWAS_LDSC_HOME`, `GWAS_LDSC_REF_DIR`, `GWAS_LDSC_HM3`, `GWAS_PROTEIN_GENE_MAP` and `GWAS_LD_REF_PFILE`, which `pipeline/nextflow.config` reads from the environment. `GWAS_TRANSFER_*` settings belong only in `server.env`.
+
 ```bash
-cp server.env .env            # server.env holds the real paths; never commit it
 Rscript src/003_data-phenotype.R     # strata columns + samplesheet
 sbatch  src/005_run.sh --out /WHERE/epic-gwas/strata-test \
                        --proteins "" --studies "Neuro_01,Brea_01_Erneg"
