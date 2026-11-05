@@ -15,6 +15,7 @@
 #
 # Read from .env:
 #   GWAS_STAGING_DIR         Local directory to upload (default for --dir)
+# Read from the untracked server.env:
 #   GWAS_TRANSFER_HOST       SFTP hostname
 #   GWAS_TRANSFER_USER       SFTP username
 #   GWAS_TRANSFER_PASS       SFTP password
@@ -27,6 +28,9 @@ PROJ_ROOT="${GWAS_PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." && p
 
 if [[ -f "${PROJ_ROOT}/.env" ]]; then
   set -a; source "${PROJ_ROOT}/.env"; set +a
+fi
+if [[ -f "${PROJ_ROOT}/server.env" ]]; then
+  set -a; source "${PROJ_ROOT}/server.env"; set +a
 fi
 mkdir -p "${PROJ_ROOT}/src/logs"
 

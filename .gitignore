@@ -1,5 +1,18 @@
+# Real settings; the tracked .env holds placeholders
+server.env
+
+# Study data: never commit
+data/
+
+# Manuscript, analyses and documents: local only
+analysis/
+output/
+docs/
+
 # System and Logs
 .DS_Store
+._*
+.claude/
 __pycache__/
 *.pyc
 .nextflow.log
@@ -9,11 +22,6 @@ src/test/
 tools/
 # Prebuilt conda environments (built by src/001_source.sh)
 /env/
-
-# Configuration
-.env
-.env.local
-.env.*
 
 # Reports and Temp
 pipeline_summary.qmd
@@ -59,10 +67,6 @@ pipeline/samplesheet.csv
 *.metrics.tsv
 *.metrics.csv
 
-# Bulk GWAS outputs (per-protein staged sumstats, ~466 MB each) and run logs.
-# Small summary tables (all_metrics.tsv, metrics_ldsc-herit.tsv,
-# staging_manifest.tsv) are kept as provenance.
-/analysis/*.tsv.gz
-/analysis/**/*.tsv.gz
+# Run outputs and SLURM logs; src/001_source.sh creates src/logs
 /pipeline/results/
 /src/logs/

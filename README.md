@@ -13,27 +13,27 @@ local inputs and submit the pipeline live in `src/`.
 
 ## Quick Start
 
-### 0. Create `.env`
+### 0. Set the Paths
 
-Start by creating a project `.env` file from the template and editing the paths
-for the current system:
+The tracked `.env` holds `/WHERE/...` placeholders and stays fixed in the repository. On the server, keep real values in an untracked `server.env` with the same settings, and copy it over `.env`:
 
 ```bash
-cp .env.example .env
+cp server.env .env
 ```
 
-At minimum, check these values before running any scripts:
+Check these values before running any scripts:
 
 - `GWAS_PROJECT_ROOT`
-- `GWAS_ANALYSIS_DIR`
+- `GWAS_RESULTS_DIR`
 - `GWAS_GENETICS_DIR`
 - `GWAS_PHENO_FILE`
 - `GWAS_SAMPLESHEET`
 - `GWAS_EXTERNAL_SOMA_RDS`
 - `GWAS_DEPOT_GENETICS_DIR`
 
-The `src/00*` helper scripts source `.env` and use those paths to prepare inputs,
-run Nextflow, and stage final transfer files.
+The `src/00*` helper scripts source `.env` and use those paths to prepare inputs, run Nextflow and stage final transfer files. `src/007_transfer.sh` also reads `server.env`, which must set `GWAS_TRANSFER_HOST`, `GWAS_TRANSFER_USER`, `GWAS_TRANSFER_PASS` and `GWAS_TRANSFER_REMOTE_DIR`. No transfer settings are tracked.
+
+`analysis/`, `output/`, `docs/`, `data/` and `server.env` are local only and ignored by git. `src/001_source.sh` creates `src/logs/`, which the `#SBATCH` log paths need, so run it first with `bash`.
 
 ### 1. Set Up the Runtime and Tools
 
@@ -119,7 +119,7 @@ sbatch src/006_staging.sh --out analysis/full --transfer transfer
 
 For a fresh run, use the numbered helper scripts in this order:
 
-1. Create and edit `.env` from `.env.example`.
+1. Copy `server.env` over `.env`.
 2. `bash src/001_source.sh`
 3. `bash src/002_data-genetics.sh`
 4. `Rscript src/003_data-phenotype.R`
